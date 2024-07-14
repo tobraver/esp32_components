@@ -6,6 +6,9 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "esp_random.h"
+#include "esp_mac.h"
+
 #define NOP() asm volatile ("nop")
 
 void delay_ms(uint32_t ms)
