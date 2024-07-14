@@ -13,6 +13,7 @@ bool wifi_sta_start(char* ssid, char* password);
 bool wifi_sta_stop(void);
 bool wifi_sta_is_connected(void);
 bool wifi_sta_wait_connected(uint32_t timeout_ms);
+char* wifi_sta_if_name(void);
 uint32_t wifi_sta_get_ip_addr(void);
 char* wifi_sta_get_ip_str(void);
 char* wifi_sta_get_ssid(void);

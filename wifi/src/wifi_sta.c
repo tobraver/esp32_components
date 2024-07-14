@@ -235,6 +235,11 @@ bool wifi_sta_wait_connected(uint32_t timeout_ms)
     return false;
 }
 
+char* wifi_sta_if_name(void)
+{
+    return WIFI_INTERFACE_NAME;
+}
+
 uint32_t wifi_sta_get_ip_addr(void)
 {
     return s_wifi_desc.ip_addr.addr;
