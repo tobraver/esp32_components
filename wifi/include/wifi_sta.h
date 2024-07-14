@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-bool wifi_sta_start(char ssid[32], char password[64]);
+bool wifi_sta_start(char* ssid, char* password);
 bool wifi_sta_stop(void);
 bool wifi_sta_is_connected(void);
 bool wifi_sta_wait_connected(uint32_t timeout_ms);

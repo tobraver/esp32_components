@@ -239,7 +239,7 @@ bool prefs_read_string(prefs_t hprefs, char* key, char* buff, uint32_t size)
         if(length < size) {
             error = nvs_get_str(handle, key, buff, &length);
         } else {
-            ESP_LOGE(TAG, "mem read get [%s] failed, buff is too short! size: %d, need: %d", key, size, length);
+            ESP_LOGE(TAG, "mem read get [%s] failed, buff is too short!", key);
         }
     } else {
         error = ESP_FAIL;
@@ -261,7 +261,7 @@ bool prefs_get_string_size(prefs_t hprefs, char* key, uint32_t* length)
         ESP_LOGE(TAG, "mem read open failed, error %s", esp_err_to_name(error));
         return false;
     }
-    error = nvs_get_str(handle, key, NULL, length);
+    error = nvs_get_str(handle, key, NULL, (size_t*)length);
     nvs_close(handle);
     if(error != ESP_OK) {
         ESP_LOGE(TAG, "mem read get [%s] failed, error %s", key, esp_err_to_name(error));
@@ -305,9 +305,12 @@ bool prefs_write_u32(prefs_t hprefs, char* key, uint32_t value)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_set_args_t set = { .key = key, .type = NVS_TYPE_U32, .value.u32 = value, .len = sizeof(uint32_t), };
     action_arg_t set_arg = { .data = &set, .len = sizeof(nvs_action_set_args_t),};
@@ -334,9 +337,12 @@ bool prefs_read_u32(prefs_t hprefs, char* key, uint32_t* value)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_get_args_t get = { .key = key, .type = NVS_TYPE_U32, .wanted_size = sizeof(uint32_t), };
     action_arg_t get_arg = { .data = &get, .len = sizeof(nvs_action_get_args_t), };
@@ -367,9 +373,12 @@ bool prefs_write_u64(prefs_t hprefs, char* key, uint64_t value)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_set_args_t set = { .key = key, .type = NVS_TYPE_U64, .value.u64 = value, .len = sizeof(uint64_t), };
     action_arg_t set_arg = { .data = &set, .len = sizeof(nvs_action_set_args_t),};
@@ -396,9 +405,12 @@ bool prefs_read_u64(prefs_t hprefs, char* key, uint64_t* value)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_get_args_t get = { .key = key, .type = NVS_TYPE_U64, .wanted_size = sizeof(uint64_t), };
     action_arg_t get_arg = { .data = &get, .len = sizeof(nvs_action_get_args_t), };
@@ -429,9 +441,12 @@ bool prefs_write_block(prefs_t hprefs, char* key, void* buff, uint32_t size)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_set_args_t set = { .key = key, .type = NVS_TYPE_BLOB, .value.blob = buff, .len = size, };
     action_arg_t set_arg = { .data = &set, .len = sizeof(nvs_action_set_args_t),};
@@ -458,25 +473,25 @@ bool prefs_read_block(prefs_t hprefs, char* key, void* buff, uint32_t size)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_get_args_t get = { .key = key, .type = NVS_TYPE_BLOB, .wanted_size = -1, };
     action_arg_t get_arg = { .data = &get, .len = sizeof(nvs_action_get_args_t), };
     memset(&result, 0x00, sizeof(action_result_t));
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_get, (void *)handle, &get_arg, &result);
-    if(error == ESP_ERR_NVS_INVALID_LENGTH) {
+    if(error == ESP_OK && result.data == NULL) {
         get.wanted_size = result.len;
-        if(result.data) {
-            free(result.data);
-        }
         memset(&result, 0x00, sizeof(action_result_t));
         error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_get, (void *)handle, &get_arg, &result);
-        if(error == ESP_OK && result.data) {
-            if(size == result.len) {
-                memcpy(buff, result.data, result.len);
-            }
+        if(error == ESP_OK && result.data && size == result.len) {
+            memcpy(buff, result.data, result.len);
+        }
+        if(result.data) {
             free(result.data);
         }
     }
@@ -501,9 +516,12 @@ bool prefs_write_string(prefs_t hprefs, char* key, char* buff)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_set_args_t set = { .key = key, .type = NVS_TYPE_STR, .value.blob = buff, .len = strlen(buff), };
     action_arg_t set_arg = { .data = &set, .len = sizeof(nvs_action_set_args_t),};
@@ -530,25 +548,24 @@ bool prefs_read_string(prefs_t hprefs, char* key, char* buff, uint32_t size)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_get_args_t get = { .key = key, .type = NVS_TYPE_STR, .wanted_size = -1, };
     action_arg_t get_arg = { .data = &get, .len = sizeof(nvs_action_get_args_t), };
-    memset(&result, 0x00, sizeof(action_result_t));
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_get, (void *)handle, &get_arg, &result);
-    if(error == ESP_ERR_NVS_INVALID_LENGTH) {
+    if(error == ESP_OK && result.data == NULL) {
         get.wanted_size = result.len;
-        if(result.data) {
-            free(result.data);
-        }
         memset(&result, 0x00, sizeof(action_result_t));
         error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_get, (void *)handle, &get_arg, &result);
-        if(error == ESP_OK && result.data) {
-            if(size == result.len) {
-                memcpy(buff, result.data, result.len);
-            }
+        if(error == ESP_OK && result.data && size >= result.len) {
+            memcpy(buff, result.data, result.len);
+        }
+        if(result.data) {
             free(result.data);
         }
     }
@@ -573,19 +590,19 @@ bool prefs_get_string_size(prefs_t hprefs, char* key, uint32_t* size)
     nvs_action_open_partition_args_t open = { .partition = hprefs.part_name, .name = hprefs.namespace, .open_mode = NVS_READWRITE, };
     action_arg_t open_arg = { .data = &open, .len = sizeof(nvs_action_open_partition_args_t), };
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_open_from_partion, NULL, &open_arg, &result);
-    if (error != ESP_OK) {
+    if (error != ESP_OK || result.data == NULL) {
         ESP_LOGE(TAG, "mem write open failed, error %s", esp_err_to_name(result.err));
         return false;
+    } else {
+        handle = *(nvs_handle *)result.data;
+        free(result.data);
     }
     nvs_action_get_args_t get = { .key = key, .type = NVS_TYPE_STR, .wanted_size = -1, };
     action_arg_t get_arg = { .data = &get, .len = sizeof(nvs_action_get_args_t), };
     memset(&result, 0x00, sizeof(action_result_t));
     error = esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_get, (void *)handle, &get_arg, &result);
-    if(error == ESP_ERR_NVS_INVALID_LENGTH) {
+    if(error == ESP_OK && result.data == NULL) {
         *size = result.len;
-        if(result.data) {
-            free(result.data);
-        }
     }
     esp_dispatcher_execute_with_func(s_dispatcher, nvs_action_close, (void *)handle, NULL, &result);
     if(error != ESP_OK) {

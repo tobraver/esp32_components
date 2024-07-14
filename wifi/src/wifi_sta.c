@@ -134,7 +134,7 @@ static void on_wifi_disconnect(void *arg, esp_event_base_t event_base,
  * @return true 
  * @return false 
  */
-bool wifi_sta_start(char ssid[32], char password[64])
+bool wifi_sta_start(char* ssid, char* password)
 {
     if(ssid == NULL || password == NULL) {
         ESP_LOGE(TAG, "ssid or password is null");
