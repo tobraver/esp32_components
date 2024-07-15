@@ -3,7 +3,8 @@
 
 #include "stdio.h"
 #include "stdint.h"
-#include "esp_websocket_client.h"
+#include "stdbool.h"
+#include "mqtt_client.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,16 +29,16 @@ typedef struct {
     on_mqtt_error_cb_t m_on_mqtt_error_cb;
 } mqtt_cli_t;
 
-void mqtt_cli_init(ws_cli_t* hclient);
-void mqtt_cli_set_on_open(ws_cli_t* hclient, on_mqtt_open_cb_t callback);
-void mqtt_cli_set_on_close(ws_cli_t* hclient, on_mqtt_close_cb_t callback);
-void mqtt_cli_set_on_message(ws_cli_t* hclient, on_mqtt_message_cb_t callback);
-void mqtt_cli_set_on_error(ws_cli_t* hclient, on_mqtt_error_cb_t callback);
-void mqtt_cli_start(ws_cli_t* hclient);
-void mqtt_cli_stop(ws_cli_t* hclient);
-void mqtt_cli_subscribe(mqtt_cli_t* hclient, char *topic);
-void mqtt_cli_unsubscribe(mqtt_cli_t* hclient, char *topic);
-void mqtt_cli_send_buff(mqtt_cli_t* hclient, char* topic, char* buff, int len);
+bool mqtt_cli_init(mqtt_cli_t* hclient);
+bool mqtt_cli_set_on_open(mqtt_cli_t* hclient, on_mqtt_open_cb_t callback);
+bool mqtt_cli_set_on_close(mqtt_cli_t* hclient, on_mqtt_close_cb_t callback);
+bool mqtt_cli_set_on_message(mqtt_cli_t* hclient, on_mqtt_message_cb_t callback);
+bool mqtt_cli_set_on_error(mqtt_cli_t* hclient, on_mqtt_error_cb_t callback);
+bool mqtt_cli_start(mqtt_cli_t* hclient);
+bool mqtt_cli_stop(mqtt_cli_t* hclient);
+bool mqtt_cli_subscribe(mqtt_cli_t* hclient, char *topic);
+bool mqtt_cli_unsubscribe(mqtt_cli_t* hclient, char *topic);
+bool mqtt_cli_send_buff(mqtt_cli_t* hclient, char* topic, char* buff, int len);
 
 #ifdef __cplusplus
 }
