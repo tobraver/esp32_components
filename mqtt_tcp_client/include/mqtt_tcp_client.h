@@ -1,5 +1,5 @@
-#ifndef __MQTT_CLIENT_H__
-#define __MQTT_CLIENT_H__
+#ifndef __MQTT_TCP_CLIENT_H__
+#define __MQTT_TCP_CLIENT_H__
 
 #include "stdio.h"
 #include "stdint.h"
@@ -43,4 +43,4 @@ bool mqtt_cli_send_buff(mqtt_cli_t* hclient, char* topic, char* buff, int len);
 #ifdef __cplusplus
 }
 #endif
-#endif // !__MQTT_CLIENT_H__
+#endif // !__MQTT_TCP_CLIENT_H__

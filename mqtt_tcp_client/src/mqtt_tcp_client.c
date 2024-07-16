@@ -106,7 +106,7 @@ bool mqtt_cli_set_on_error(mqtt_cli_t* hclient, on_mqtt_error_cb_t callback)
 
 bool mqtt_cli_start(mqtt_cli_t* hclient)
 {
-    if(hclient == NULL || hclient->m_client) {
+    if(hclient == NULL || hclient->m_client == NULL) {
         ESP_LOGE(TAG, "mqtt client start failed, hclient is NULL or m_client is NULL");
         return false;
     }
@@ -121,7 +121,7 @@ bool mqtt_cli_start(mqtt_cli_t* hclient)
 
 bool mqtt_cli_stop(mqtt_cli_t* hclient)
 {
-    if(hclient == NULL) {
+    if(hclient == NULL || hclient->m_client == NULL) {
         return true;
     }
     esp_err_t error = esp_mqtt_client_stop(hclient->m_client);
@@ -135,7 +135,7 @@ bool mqtt_cli_stop(mqtt_cli_t* hclient)
 
 bool mqtt_cli_subscribe(mqtt_cli_t* hclient, char *topic)
 {
-    if(hclient == NULL || hclient->m_client) {
+    if(hclient == NULL || hclient->m_client == NULL) {
         ESP_LOGE(TAG, "mqtt client subscribe failed, hclient is NULL or m_client is NULL");
         return false;
     }
@@ -150,7 +150,7 @@ bool mqtt_cli_subscribe(mqtt_cli_t* hclient, char *topic)
 
 bool mqtt_cli_unsubscribe(mqtt_cli_t* hclient, char *topic)
 {
-    if(hclient == NULL || hclient->m_client) {
+    if(hclient == NULL || hclient->m_client == NULL) {
         ESP_LOGE(TAG, "mqtt client unsubscribe failed, hclient is NULL or m_client is NULL");
         return false;
     }
@@ -165,7 +165,7 @@ bool mqtt_cli_unsubscribe(mqtt_cli_t* hclient, char *topic)
 
 bool mqtt_cli_send_buff(mqtt_cli_t* hclient, char* topic, char* buff, int len)
 {
-    if(hclient == NULL || hclient->m_client) {
+    if(hclient == NULL || hclient->m_client == NULL) {
         ESP_LOGE(TAG, "mqtt client send buff failed, hclient is NULL or m_client is NULL");
         return false;
     }
