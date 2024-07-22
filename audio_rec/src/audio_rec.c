@@ -99,7 +99,7 @@ static char *TAG = "m_audio_rec";
 
 typedef struct {
     bool                    is_init;
-    esp_audio_handle_t      player;
+    audio_pipeline_handle_t player;
     audio_rec_handle_t      recorder;
     audio_element_handle_t  raw_read;
     audio_element_handle_t  raw_write;
@@ -116,39 +116,34 @@ typedef struct {
  */
 static audio_rec_desc_t s_rec_desc;
 
-static esp_audio_handle_t audio_rec_setup_player(void)
+static audio_pipeline_handle_t audio_rec_setup_player(void)
 {
-    esp_audio_cfg_t cfg = DEFAULT_ESP_AUDIO_CONFIG();
-    audio_board_handle_t board_handle = audio_board_init();
-
-    cfg.vol_handle = board_handle->audio_hal;
-    cfg.vol_set = (audio_volume_set)audio_hal_set_volume;
-    cfg.vol_get = (audio_volume_get)audio_hal_get_volume;
-    cfg.resample_rate = 48000;
-    cfg.prefer_type = ESP_AUDIO_PREFER_MEM;
-
-    s_rec_desc.player = esp_audio_create(&cfg);
-    audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
+    s_rec_desc.player = audio_pipeline_init(&pipeline_cfg);
+    if(s_rec_desc.player == NULL) {
+        ESP_LOGE(TAG, "## audio rec player init failed\r\n");
+        return NULL;
+    }
 
     // Create readers and add to esp_audio
     raw_stream_cfg_t raw_cfg = RAW_STREAM_CFG_DEFAULT();
     raw_cfg.type = AUDIO_STREAM_WRITER;
     s_rec_desc.raw_write = raw_stream_init(&raw_cfg);
-    esp_audio_input_stream_add(s_rec_desc.player, s_rec_desc.raw_write);
 
     // Add decoders and encoders to esp_audio
+    audio_element_handle_t player_decoder = NULL;
     if(s_rec_desc.player_type == AUDIO_REC_PLAYER_TYPE_WAV) {
         wav_decoder_cfg_t wav_dec_cfg = DEFAULT_WAV_DECODER_CONFIG();
         wav_dec_cfg.task_core = 1;
-        esp_audio_codec_lib_add(s_rec_desc.player, AUDIO_CODEC_TYPE_DECODER, wav_decoder_init(&wav_dec_cfg));
+        player_decoder = wav_decoder_init(&wav_dec_cfg);
     } else if(s_rec_desc.player_type == AUDIO_REC_PLAYER_TYPE_MP3) {
         mp3_decoder_cfg_t mp3_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
         mp3_dec_cfg.task_core = 1;
-        esp_audio_codec_lib_add(s_rec_desc.player, AUDIO_CODEC_TYPE_DECODER, mp3_decoder_init(&mp3_dec_cfg));
+        player_decoder = mp3_decoder_init(&mp3_dec_cfg);
     } else { // default is pcm
-        pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
+        pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_PCM_DECODER_CONFIG();
         pcm_dec_cfg.task_core = 1;
-        esp_audio_codec_lib_add(s_rec_desc.player, AUDIO_CODEC_TYPE_DECODER, pcm_decoder_init(&pcm_dec_cfg));
+        player_decoder = pcm_decoder_init(&pcm_dec_cfg);
     }
 
     // Create writers and add to esp_audio
@@ -161,14 +156,15 @@ static esp_audio_handle_t audio_rec_setup_player(void)
     i2s_writer.need_expand = (CODEC_ADC_BITS_PER_SAMPLE != I2S_BITS_PER_SAMPLE_16BIT);
 #endif
     i2s_writer.type = AUDIO_STREAM_WRITER;
+    audio_element_handle_t i2s_stream_writer = i2s_stream_init(&i2s_writer);
 
-    esp_audio_output_stream_add(s_rec_desc.player, i2s_stream_init(&i2s_writer));
+    audio_pipeline_register(s_rec_desc.player, s_rec_desc.raw_write, "raw_write");
+    audio_pipeline_register(s_rec_desc.player, player_decoder, "player_dec");
+    audio_pipeline_register(s_rec_desc.player, i2s_stream_writer, "i2s_writer");
 
-    // Set default volume
-    esp_audio_vol_set(s_rec_desc.player, AUDIO_REC_PLAYER_DEF_VOLUME);
-    AUDIO_MEM_SHOW(TAG);
-
-    ESP_LOGI(TAG, "esp_audio instance is:%p\r\n", s_rec_desc.player);
+    const char *link_tag[3] = {"raw_write", "player_dec", "i2s_writer"};
+    audio_pipeline_link(s_rec_desc.player, &link_tag[0], 3);
+    audio_pipeline_run(s_rec_desc.player);
     return s_rec_desc.player;
 }
 
@@ -299,6 +295,7 @@ static audio_rec_handle_t audio_rec_start_recorder(void)
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
     pipeline = audio_pipeline_init(&pipeline_cfg);
     if (NULL == pipeline) {
+        ESP_LOGE(TAG, "audio recorder init failed");
         return NULL;
     }
 
@@ -424,18 +421,33 @@ bool audio_rec_init(audio_rec_conf_t conf)
         ESP_LOGW(TAG, "## audio rec is already init");
         return true;
     }
+
     memset(&s_rec_desc, 0, sizeof(s_rec_desc));
     s_rec_desc.player_type = conf.player_type;
     s_rec_desc.event_cb = conf.event_cb;
+
+    char* cmd_word = conf.cmd_word;
+    if(cmd_word && strlen(cmd_word)) {
+        s_rec_desc.command_word = audio_calloc(1, strlen(cmd_word) + 1);
+        if(s_rec_desc.command_word == NULL) {
+            ESP_LOGE(TAG, "## malloc command word memory failed!");
+            return false;
+        } else {
+            memcpy(s_rec_desc.command_word, cmd_word, strlen(cmd_word));
+        }
+    } 
 
     if(audio_board_init() == NULL) {
         ESP_LOGE(TAG, "## board init faile, please check your board!");
         return false;
     }
+    audio_board_get_handle()->audio_hal->audio_codec_ctrl(AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
+
     if(audio_rec_setup_player() == NULL) {
         ESP_LOGE(TAG, "## setup player failed!");
         return false;
     }
+
     if(audio_rec_start_recorder() == NULL) {
         ESP_LOGE(TAG, "## start recorder failed!");
         return false;
@@ -447,16 +459,6 @@ bool audio_rec_init(audio_rec_conf_t conf)
         return false;
     }
 
-    char* cmd_word = conf.cmd_word;
-    if(cmd_word && strlen(cmd_word)) {
-        s_rec_desc.command_word = audio_calloc(1, strlen(cmd_word) + 1);
-        if(s_rec_desc.command_word == NULL) {
-            ESP_LOGE(TAG, "## malloc command word memory failed!");
-            return false;
-        } else {
-            memcpy(s_rec_desc.command_word, cmd_word, strlen(cmd_word));
-        }
-    }
     audio_thread_create(NULL, "read_task", audio_rec_voice_read_task, NULL, 4 * 1024, 5, true, 0);
     s_rec_desc.is_init = true;
     return true;
@@ -471,7 +473,9 @@ bool audio_rec_deinit(void)
 
     if(s_rec_desc.player != NULL) {
         ESP_LOGW(TAG, "## destory player");
-        esp_audio_destroy(s_rec_desc.player);
+        audio_pipeline_stop(s_rec_desc.player);
+        audio_pipeline_wait_for_stop(s_rec_desc.player);
+        audio_pipeline_deinit(s_rec_desc.player);
         s_rec_desc.player = NULL;
     }
 
@@ -523,7 +527,13 @@ bool audio_rec_set_volume(int volume)
     }
     volume = volume > 100 ? 100 : volume;
     volume = volume < 0 ? 0 : volume;
-    return esp_audio_vol_set(s_rec_desc.player, volume) == ESP_OK ? true : false;
+
+    audio_board_handle_t board_hd = audio_board_get_handle();
+    if(board_hd == NULL) {
+        ESP_LOGE(TAG, "## audio board is not init");
+        return false;
+    }
+    return board_hd->audio_hal->audio_codec_set_volume(volume) == ESP_OK ? true : false;
 }
 
 bool audio_rec_play(void* src, int len)
