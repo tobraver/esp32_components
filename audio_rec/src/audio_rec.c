@@ -441,7 +441,9 @@ bool audio_rec_init(audio_rec_conf_t conf)
         ESP_LOGE(TAG, "## board init faile, please check your board!");
         return false;
     }
-    audio_board_get_handle()->audio_hal->audio_codec_ctrl(AUDIO_HAL_CODEC_MODE_ENCODE, AUDIO_HAL_CTRL_START);
+    audio_board_handle_t board_hd = audio_board_get_handle();
+    board_hd->audio_hal->audio_codec_ctrl(AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+    board_hd->audio_hal->audio_codec_set_volume(AUDIO_REC_PLAYER_DEF_VOLUME);
 
     if(audio_rec_setup_player() == NULL) {
         ESP_LOGE(TAG, "## setup player failed!");
