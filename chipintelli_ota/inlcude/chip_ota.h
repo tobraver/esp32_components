@@ -21,11 +21,11 @@ extern "C" {
 
 void chip_ota_init(void);
 bool chip_ota_load_updater_file(void);
+bool chip_ota_load_frameware_file(void);
 bool chip_ota_boodloader_handshake(void);
 bool chip_ota_bootloader_send_agent(void);
 bool chip_ota_updater_prepare_upgrade(void);
 bool chip_ota_updater_get_partition(void);
-bool chip_ota_load_frameware_file(void);
 uint32_t chip_ota_updater_verify_partition(void);
 bool chip_ota_updater_need_upgrade(uint32_t verify_res);
 bool chip_ota_updater_update_partition_table(void);

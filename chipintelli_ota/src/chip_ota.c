@@ -8,7 +8,7 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 
-#define OTA_BOOTLOADER_BAUDRATE             115200 // 最大921600 (目前只支持115200)
+#define OTA_BOOTLOADER_BAUDRATE             921600 // 最大921600 (目前只支持115200)
 #define OTA_UPDATER_BAUDRATE                921600 // 最大2000000
 
 #define OTA_CLOUD_SIZE                      4096*10 //>=MAX_DATA_LENGTH ,且能整除4096
@@ -378,7 +378,7 @@ bool chip_ota_recv_cmd(uint32_t msg_dlen, uint8_t msg_type, uint8_t cmd, uint8_t
 
 bool chip_ota_boodloader_handshake(void)
 {
-    chip_ota_uart_set_baud(OTA_UPDATER_BAUDRATE);
+    chip_ota_uart_set_baud(OTA_BOOTLOADER_BAUDRATE);
     ESP_LOGI(TAG, "## Bootloader握手");
     uint32_t try_cnt = 200;
     while (try_cnt) {
@@ -1336,6 +1336,7 @@ bool chip_ota_updater_exit_upgrade(void)
     chip_ota_send_cmd(MSG_TYPE_CMD, MSG_CMD_SYS_RST, 0x00, NULL, 0);
     chip_ota_delay_ms(100);
     chip_ota_send_cmd(MSG_TYPE_CMD, MSG_CMD_SYS_RST, 0x00, NULL, 0);
+    chip_ota_uart_set_baud(CHIP_OTA_UART_BAUD);
     return true;
 }
 

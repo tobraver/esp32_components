@@ -1,4 +1,4 @@
-idf_component_register(SRCS "chip_ota.c"
-                    INCLUDE_DIRS "."
-                    REQUIRES main
-                    EMBED_TXTFILES ci130x_updater.bin xiaoai.bin)
+idf_component_register(SRCS "src/chip_ota.c"
+                    INCLUDE_DIRS "inlcude"
+                    REQUIRES driver
+                    EMBED_TXTFILES bin/ci130x_updater.bin bin/xiaoai.bin)
