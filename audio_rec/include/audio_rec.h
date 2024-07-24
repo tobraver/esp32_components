@@ -42,6 +42,9 @@ typedef enum {
     AUDIO_REC_PLAYER_TYPE_MP3,
 } audio_rec_player_type_t;
 
+/**
+ * @brief src is 16k 16bit pcm data
+ */
 typedef void (*audio_rec_event_cb_t)(audio_rec_event_t event, void* src, int len);
 
 typedef struct {
