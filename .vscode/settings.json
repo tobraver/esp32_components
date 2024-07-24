@@ -1,5 +1,6 @@
 {
     "files.associations": {
         "file_manager.h": "c"
-    }
+    },
+    "cmake.sourceDirectory": "D:/project/example/esp32/esp32_components/base64"
 }
