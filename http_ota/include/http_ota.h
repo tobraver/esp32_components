@@ -15,12 +15,6 @@ typedef enum {
     HTTP_OTA_UPDATE_TYPE_MAX,
 } http_ota_update_type_t;
 
-typedef enum {
-    HTTP_OTA_MSG_TYPE_START = 0,
-    HTTP_OTA_MSG_TYPE_DATA,
-    HTTP_OTA_MSG_TYPE_END,
-} http_ota_msg_type_t;
-
 typedef bool (*http_ota_prepare_cb_t)(void);
 typedef bool (*http_ota_need_upgrade_cb_t)(void);
 typedef bool (*http_ota_upgrade_pkt_cb_t)(uint8_t* buff, uint32_t len);
@@ -30,6 +24,14 @@ typedef bool (*http_ota_finished_check_cb_t)(void);
 extern "C" {
 #endif
 
+bool http_ota_init(void);
+bool http_ota_deinit(void);
+bool http_ota_set_url(http_ota_update_type_t type, const char* url);
+bool http_ota_set_prepare_cb(http_ota_update_type_t type, http_ota_prepare_cb_t cb);
+bool http_ota_set_need_upgrade_cb(http_ota_update_type_t type, http_ota_need_upgrade_cb_t cb);
+bool http_ota_set_upgrade_pkt_cb(http_ota_update_type_t type, http_ota_upgrade_pkt_cb_t cb);
+bool http_ota_set_finished_check_cb(http_ota_update_type_t type, http_ota_finished_check_cb_t cb);
+bool http_ota_upgrade(void);
 
 #if __cplusplus
 }
