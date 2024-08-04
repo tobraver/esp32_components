@@ -13,11 +13,21 @@
 #include "http_stream.h"
 
 #include "esp_log.h"
-
+#include "esp_ota_ops.h"
 
 static const char *TAG = "http_ota";
 
 #define UPGRADE_READER_BUF_LEN 1024
+
+// [warning] not modify
+typedef struct {
+    void *ota_handle;
+    esp_err_t (*get_img_desc)(void *handle, esp_app_desc_t *new_app_info);
+    esp_err_t (*perform)(void *handle);
+    int (*get_image_len_read)(void *handle);
+    bool (*all_read)(void *handle);
+    esp_err_t (*finish)(void *handle);
+} ota_app_upgrade_ctx_t;
 
 typedef struct {
     int write_offset;
@@ -28,10 +38,11 @@ typedef struct {
 typedef struct {
     uint8_t is_init;
     uint8_t is_update;
-    http_ota_update_type_t curr_update;
+    uint8_t is_app_succ;
     SemaphoreHandle_t lock;
     periph_service_handle_t handle;
     ota_upgrade_ops_t upgrade_list[HTTP_OTA_UPDATE_TYPE_MAX];
+    ota_upgrade_ops_t current_list[HTTP_OTA_UPDATE_TYPE_MAX];
     http_ota_prepare_cb_t prepare_cb[HTTP_OTA_UPDATE_TYPE_MAX];
     http_ota_need_upgrade_cb_t need_upgrade_cb[HTTP_OTA_UPDATE_TYPE_MAX];
     http_ota_upgrade_pkt_cb_t upgrade_pkt_cb[HTTP_OTA_UPDATE_TYPE_MAX];
@@ -42,6 +53,7 @@ static http_ota_desc_t s_ota_desc;
 
 static char* http_ota_get_label(http_ota_update_type_t type);
 static ota_service_err_reason_t _http_ota_ops_partition_need_upgrade(void *handle, ota_node_attr_t *node);
+static ota_service_err_reason_t _http_ota_ops_app_need_upgrade(void *handle, ota_node_attr_t *node);
 
 void http_ota_desc_lock(void)
 {
@@ -61,10 +73,20 @@ esp_err_t http_ota_event_handler(periph_service_handle_t handle, periph_service_
 {
     if (evt->type == OTA_SERV_EVENT_TYPE_RESULT) {
         ota_result_t *result_data = evt->data;
+        ota_upgrade_ops_t* ops = &s_ota_desc.current_list[result_data->id];
         if (result_data->result != ESP_OK) {
-            ESP_LOGE(TAG, "List id: %d, OTA failed", result_data->id);
+            ESP_LOGE(TAG, "List id: %d, Label: %s, OTA failed", result_data->id, ops->node.label);
         } else {
-            ESP_LOGI(TAG, "List id: %d, OTA success", result_data->id);
+            if(strcmp(ops->node.label, http_ota_get_label(HTTP_OTA_UPDATE_TYPE_FIRMWARE)) == 0) {
+                if(s_ota_desc.is_app_succ) {
+                    ESP_LOGI(TAG, "List id: %d, Label: %s, OTA success", result_data->id, ops->node.label);
+                    esp_restart();
+                } else {
+                    ESP_LOGE(TAG, "List id: %d, Label: %s, OTA failed", result_data->id, ops->node.label);
+                }
+            } else {
+                ESP_LOGI(TAG, "List id: %d, Label: %s, OTA success", result_data->id, ops->node.label);
+            }
         }
     } else if (evt->type == OTA_SERV_EVENT_TYPE_FINISH) {
         http_ota_desc_lock();
@@ -174,8 +196,8 @@ bool http_ota_set_url(http_ota_update_type_t type, const char* url)
         s_ota_desc.upgrade_list[type].need_upgrade = _http_ota_ops_partition_need_upgrade;
     } else if(type == HTTP_OTA_UPDATE_TYPE_FIRMWARE) {
         s_ota_desc.upgrade_list[type].node.type = ESP_PARTITION_TYPE_APP;
-        s_ota_desc.upgrade_list[type].reboot_flag = true;
         ota_app_get_default_proc(&s_ota_desc.upgrade_list[type]);
+        s_ota_desc.upgrade_list[type].need_upgrade = _http_ota_ops_app_need_upgrade;
     } else {
         s_ota_desc.upgrade_list[type].node.type = ESP_PARTITION_TYPE_DATA;
     }
@@ -281,9 +303,90 @@ static ota_service_err_reason_t _http_ota_ops_need_upgrade(void *handle, ota_nod
 
 static ota_service_err_reason_t _http_ota_ops_partition_need_upgrade(void *handle, ota_node_attr_t *node)
 {
+    uint8_t target_mask = 0;
+    char* target_label = http_ota_get_label(HTTP_OTA_UPDATE_TYPE_MODEL);
+    if(node->label && target_label && strcmp(target_label, node->label) == 0) {
+        target_mask |= (1 << HTTP_OTA_UPDATE_TYPE_MODEL);
+    }
+    target_label = http_ota_get_label(HTTP_OTA_UPDATE_TYPE_MUSIC);
+    if(node->label && target_label && strcmp(target_label, node->label) == 0) {
+        target_mask |= (1 << HTTP_OTA_UPDATE_TYPE_MUSIC);
+    }
+    if(target_mask == 0) {
+        ESP_LOGE(TAG, "partition label [%s] not match label [model, music]", node->label);
+        return OTA_SERV_ERR_REASON_UNKNOWN;
+    }
+
+    // label: model, flash_tone
+    const esp_partition_t *partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, node->label);
+    if (partition == NULL) {
+        ESP_LOGE(TAG, "data partition [%s] not found", node->label);
+        return OTA_SERV_ERR_REASON_PARTITION_NOT_FOUND;
+    }
+
+    // read header from incoming stream
+    uint8_t incoming_header[UPGRADE_READER_BUF_LEN] = { 0 };
+    if (ota_data_image_stream_read(handle, (char *)incoming_header, sizeof(incoming_header)) != ESP_OK) {
+        ESP_LOGE(TAG, "read partition [%s] incoming header failed, size: %d", node->label, sizeof(incoming_header));
+        return OTA_SERV_ERR_REASON_STREAM_RD_FAIL;
+    }
+    char incoming_header_str[UPGRADE_READER_BUF_LEN] = { 0 };
+    for(uint32_t i=0; i<sizeof(incoming_header); i++) {
+        incoming_header_str[i] = incoming_header[i] ? incoming_header[i] : 0xff;
+    }
+
+    // verify header
+    char* fmt_str = "";
+    if(target_mask & (1 << HTTP_OTA_UPDATE_TYPE_MUSIC)) {
+        fmt_str = "ESP_TONE_BIN";
+    } else if(target_mask & (1 << HTTP_OTA_UPDATE_TYPE_MODEL)) {
+        fmt_str = "MODEL_INFO";
+    }
+    if(strstr(incoming_header_str, fmt_str) == NULL) {
+        ESP_LOGE(TAG, "partition [%s] header not match, file format is error!", node->label);
+        return OTA_SERV_ERR_REASON_UNKNOWN;
+    }
+    
+    // write flash
+    if (esp_partition_erase_range(partition, 0, partition->size) != ESP_OK) {
+        ESP_LOGE(TAG, "Erase [%s] failed", node->label);
+        return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
+    }
+    ota_data_partition_erase_mark(handle);
+    ota_data_partition_write(handle, (char *)&incoming_header, sizeof(incoming_header));
+    
     ESP_LOGI(TAG, "partition need upgrade, label: %s", node->label);
     return OTA_SERV_ERR_REASON_SUCCESS;
 }
+
+static ota_service_err_reason_t _http_ota_ops_app_need_upgrade(void *handle, ota_node_attr_t *node)
+{
+    http_ota_desc_lock();
+    s_ota_desc.is_app_succ = false;
+    http_ota_desc_unlock();
+
+    ota_app_upgrade_ctx_t *context = (ota_app_upgrade_ctx_t *)handle;
+    AUDIO_NULL_CHECK(TAG, context, return OTA_SERV_ERR_REASON_NULL_POINTER);
+    AUDIO_NULL_CHECK(TAG, context->ota_handle, return OTA_SERV_ERR_REASON_NULL_POINTER);
+    esp_app_desc_t update_desc;
+    esp_err_t err = context->get_img_desc(context->ota_handle, &update_desc);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "get_img_desc failed");
+        return OTA_SERV_ERR_REASON_GET_NEW_APP_DESC_FAIL;
+    }
+    
+    const esp_app_desc_t* local_desc = esp_app_get_description();
+    if(strcmp(local_desc->project_name, update_desc.project_name) != 0) {
+        ESP_LOGE(TAG, "project name not match, local project name: %s, update project name: %s", local_desc->project_name, update_desc.project_name);
+        return OTA_SERV_ERR_REASON_ERROR_PROJECT_NAME;
+    }
+
+    http_ota_desc_lock();
+    s_ota_desc.is_app_succ = true;
+    http_ota_desc_unlock();
+    return OTA_SERV_ERR_REASON_SUCCESS;
+}
+
 
 static ota_service_err_reason_t _http_ota_ops_exec_upgrade(void *handle, ota_node_attr_t *node)
 {
@@ -404,7 +507,9 @@ bool http_ota_upgrade(void)
         ESP_LOGE(TAG, "ota is update");
         return false;
     }
-    ota_upgrade_ops_t upgrade_list[HTTP_OTA_UPDATE_TYPE_MAX] = { 0 };
+
+    http_ota_desc_lock();
+    ota_upgrade_ops_t* upgrade_list = &s_ota_desc.current_list[0];
     uint32_t upgrade_num = 0;
 
     for(http_ota_update_type_t type = 0; type < HTTP_OTA_UPDATE_TYPE_MAX; type++) {
@@ -412,6 +517,7 @@ bool http_ota_upgrade(void)
             upgrade_list[upgrade_num++] = s_ota_desc.upgrade_list[type];
         }
     }
+    http_ota_desc_unlock();
 
     if(upgrade_num == 0) {
         ESP_LOGW(TAG, "no upgrade list");
