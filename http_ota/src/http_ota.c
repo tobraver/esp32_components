@@ -17,6 +17,9 @@
 
 static const char *TAG = "http_ota";
 
+extern const uint8_t server_cert_pem_start[] asm("_binary_server_cert_pem_start");
+extern const uint8_t server_cert_pem_end[]   asm("_binary_server_cert_pem_end");
+
 #define UPGRADE_READER_BUF_LEN 1024
 
 // [warning] not modify
@@ -47,13 +50,18 @@ typedef struct {
     http_ota_need_upgrade_cb_t need_upgrade_cb[HTTP_OTA_UPDATE_TYPE_MAX];
     http_ota_upgrade_pkt_cb_t upgrade_pkt_cb[HTTP_OTA_UPDATE_TYPE_MAX];
     http_ota_finished_check_cb_t finished_check_cb[HTTP_OTA_UPDATE_TYPE_MAX];
+    http_ota_upgrade_status_cb_t status_sb;
 } http_ota_desc_t;
 
 static http_ota_desc_t s_ota_desc;
 
 static char* http_ota_get_label(http_ota_update_type_t type);
+static http_ota_update_type_t http_ota_get_type(char* label);
 static ota_service_err_reason_t _http_ota_ops_partition_need_upgrade(void *handle, ota_node_attr_t *node);
 static ota_service_err_reason_t _http_ota_ops_app_need_upgrade(void *handle, ota_node_attr_t *node);
+
+// notify update stauts to user
+#define HTTP_OTA_NOTIFY_UPDATE_STATUS(type, succ)  if(s_ota_desc.status_sb) { s_ota_desc.status_sb(type, succ); }
 
 void http_ota_desc_lock(void)
 {
@@ -74,17 +82,22 @@ esp_err_t http_ota_event_handler(periph_service_handle_t handle, periph_service_
     if (evt->type == OTA_SERV_EVENT_TYPE_RESULT) {
         ota_result_t *result_data = evt->data;
         ota_upgrade_ops_t* ops = &s_ota_desc.current_list[result_data->id];
+        http_ota_update_type_t type = http_ota_get_type(ops->node.label);
         if (result_data->result != ESP_OK) {
             ESP_LOGE(TAG, "List id: %d, Label: %s, OTA failed", result_data->id, ops->node.label);
+            HTTP_OTA_NOTIFY_UPDATE_STATUS(type, false);
         } else {
             if(strcmp(ops->node.label, http_ota_get_label(HTTP_OTA_UPDATE_TYPE_FIRMWARE)) == 0) {
                 if(s_ota_desc.is_app_succ) {
                     ESP_LOGI(TAG, "List id: %d, Label: %s, OTA success", result_data->id, ops->node.label);
+                    HTTP_OTA_NOTIFY_UPDATE_STATUS(type, true);
                     esp_restart();
                 } else {
                     ESP_LOGE(TAG, "List id: %d, Label: %s, OTA failed", result_data->id, ops->node.label);
+                    HTTP_OTA_NOTIFY_UPDATE_STATUS(type, false);
                 }
             } else {
+                HTTP_OTA_NOTIFY_UPDATE_STATUS(type, true);
                 ESP_LOGI(TAG, "List id: %d, Label: %s, OTA success", result_data->id, ops->node.label);
             }
         }
@@ -146,24 +159,42 @@ bool http_ota_deinit(void)
     return true;
 }
 
+static char* s_http_ota_label[HTTP_OTA_UPDATE_TYPE_MAX] = {
+    [HTTP_OTA_UPDATE_TYPE_MODEL] = "model",
+    [HTTP_OTA_UPDATE_TYPE_MUSIC] = "flash_tone",
+    [HTTP_OTA_UPDATE_TYPE_USER_1] = "user1",
+    [HTTP_OTA_UPDATE_TYPE_USER_2] = "user2",
+    [HTTP_OTA_UPDATE_TYPE_USER_3] = "user3",
+    [HTTP_OTA_UPDATE_TYPE_FIRMWARE] = "firmware"
+};
+
 static char* http_ota_get_label(http_ota_update_type_t type)
 {
-    if(type == HTTP_OTA_UPDATE_TYPE_MODEL) {
-        return "model";
-    } else if(type == HTTP_OTA_UPDATE_TYPE_MUSIC) {
-        return "flash_tone";
-    } else if(type == HTTP_OTA_UPDATE_TYPE_USER_1) {
-        return "user1";
-    } else if(type == HTTP_OTA_UPDATE_TYPE_USER_2) {
-        return "user2";
-    } else if(type == HTTP_OTA_UPDATE_TYPE_USER_3) {
-        return "user3";
-    } else if(type == HTTP_OTA_UPDATE_TYPE_FIRMWARE) {
-        return "firmware";
+    if(type >= HTTP_OTA_UPDATE_TYPE_MAX) {
+        return "null";
     }
-    return "null";
+    return s_http_ota_label[type];
 }
 
+static http_ota_update_type_t http_ota_get_type(char* label)
+{
+    http_ota_update_type_t type = HTTP_OTA_UPDATE_TYPE_MAX;
+    if(label == NULL) {
+        return type;
+    }
+    for(http_ota_update_type_t i=0; i<HTTP_OTA_UPDATE_TYPE_MAX; i++) {
+        if(strcmp(label, s_http_ota_label[i]) == 0) {
+            type = i;
+            break;
+        }
+    }
+    return type;
+}
+
+char* http_ota_get_cert_pem(void)
+{
+    return (char*)server_cert_pem_start;
+}
 
 bool http_ota_set_url(http_ota_update_type_t type, const char* url)
 {
@@ -181,7 +212,7 @@ bool http_ota_set_url(http_ota_update_type_t type, const char* url)
 
     s_ota_desc.upgrade_list[type].node.uri = NULL;
     s_ota_desc.upgrade_list[type].node.label = http_ota_get_label(type);
-    s_ota_desc.upgrade_list[type].node.cert_pem = NULL;
+    s_ota_desc.upgrade_list[type].node.cert_pem = http_ota_get_cert_pem();
     s_ota_desc.upgrade_list[type].node.uri = (char*)url;
     s_ota_desc.upgrade_list[type].prepare = NULL;
     s_ota_desc.upgrade_list[type].need_upgrade = NULL;
@@ -501,6 +532,19 @@ bool http_ota_set_finished_check_cb(http_ota_update_type_t type, http_ota_finish
     return true;
 }
 
+bool http_ota_set_status_cb(http_ota_upgrade_status_cb_t cb)
+{
+    if(s_ota_desc.is_update) {
+        ESP_LOGE(TAG, "ota is update");
+        return false;
+    }
+
+    http_ota_desc_lock();
+    s_ota_desc.status_sb = cb;
+    http_ota_desc_unlock();
+    return true;
+}
+
 bool http_ota_upgrade(void)
 {
     if(s_ota_desc.is_update) {
@@ -547,7 +591,10 @@ bool http_ota_upgrade(void)
     return true;
 }
 
-
+bool http_ota_is_update(void)
+{
+    return s_ota_desc.is_update;
+}
 
 
 
