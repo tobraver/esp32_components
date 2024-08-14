@@ -11,6 +11,11 @@
 #define AUDIO_REC_PLAYER_DEF_VOLUME 70
 
 /**
+ * @brief audio recorder player cache size
+ */
+#define AUDIO_REC_PLAYER_CACHE_SIZE 10*1024
+
+/**
  * @brief audio recorder wakeup timeout [ms]
  * 
  * @note audio enter sleep after wakeup timeout
@@ -39,7 +44,7 @@ typedef enum {
 typedef enum {
     AUDIO_REC_PLAYER_TYPE_PCM,
     AUDIO_REC_PLAYER_TYPE_WAV,
-    AUDIO_REC_PLAYER_TYPE_MP3,
+    AUDIO_REC_PLAYER_TYPE_MP3, // stereo 48k
 } audio_rec_player_type_t;
 
 /**
@@ -59,6 +64,8 @@ extern "C" {
 
 bool audio_rec_init(audio_rec_conf_t conf);
 bool audio_rec_deinit(void);
+bool audio_rec_install_player(void);
+bool audio_rec_unstall_player(void);
 bool audio_rec_set_volume(int volume);
 bool audio_rec_play(void* src, int len);
 

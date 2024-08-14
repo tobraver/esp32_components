@@ -103,6 +103,7 @@ typedef struct {
     audio_rec_handle_t      recorder;
     audio_element_handle_t  raw_read;
     audio_element_handle_t  raw_write;
+    ringbuf_handle_t        raw_write_cache;
     QueueHandle_t           voice_ctrl;
     bool                    voice_exit;
     bool                    voice_reading;
@@ -118,10 +119,15 @@ static audio_rec_desc_t s_rec_desc;
 
 static audio_pipeline_handle_t audio_rec_setup_player(void)
 {
+    if(s_rec_desc.player) {
+        ESP_LOGW(TAG, "## audio rec player is already setup");
+        return s_rec_desc.player;
+    }
+
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
     s_rec_desc.player = audio_pipeline_init(&pipeline_cfg);
     if(s_rec_desc.player == NULL) {
-        ESP_LOGE(TAG, "## audio rec player init failed\r\n");
+        ESP_LOGE(TAG, "## audio rec player init failed");
         return NULL;
     }
 
@@ -131,19 +137,22 @@ static audio_pipeline_handle_t audio_rec_setup_player(void)
     s_rec_desc.raw_write = raw_stream_init(&raw_cfg);
 
     // Add decoders and encoders to esp_audio
-    audio_element_handle_t player_decoder = NULL;
+    audio_element_handle_t raw_decoder = NULL;
     if(s_rec_desc.player_type == AUDIO_REC_PLAYER_TYPE_WAV) {
         wav_decoder_cfg_t wav_dec_cfg = DEFAULT_WAV_DECODER_CONFIG();
         wav_dec_cfg.task_core = 1;
-        player_decoder = wav_decoder_init(&wav_dec_cfg);
+        wav_dec_cfg.task_prio = 19;
+        raw_decoder = wav_decoder_init(&wav_dec_cfg);
     } else if(s_rec_desc.player_type == AUDIO_REC_PLAYER_TYPE_MP3) {
         mp3_decoder_cfg_t mp3_dec_cfg = DEFAULT_MP3_DECODER_CONFIG();
         mp3_dec_cfg.task_core = 1;
-        player_decoder = mp3_decoder_init(&mp3_dec_cfg);
+        mp3_dec_cfg.task_prio = 19;
+        raw_decoder = mp3_decoder_init(&mp3_dec_cfg);
     } else { // default is pcm
         pcm_decoder_cfg_t pcm_dec_cfg = DEFAULT_PCM_DECODER_CONFIG();
         pcm_dec_cfg.task_core = 1;
-        player_decoder = pcm_decoder_init(&pcm_dec_cfg);
+        pcm_dec_cfg.task_prio = 19;
+        raw_decoder = pcm_decoder_init(&pcm_dec_cfg);
     }
 
     // Create writers and add to esp_audio
@@ -156,16 +165,45 @@ static audio_pipeline_handle_t audio_rec_setup_player(void)
     i2s_writer.need_expand = (CODEC_ADC_BITS_PER_SAMPLE != I2S_BITS_PER_SAMPLE_16BIT);
 #endif
     i2s_writer.type = AUDIO_STREAM_WRITER;
+    i2s_writer.uninstall_drv = false;
     audio_element_handle_t i2s_stream_writer = i2s_stream_init(&i2s_writer);
 
     audio_pipeline_register(s_rec_desc.player, s_rec_desc.raw_write, "raw_write");
-    audio_pipeline_register(s_rec_desc.player, player_decoder, "player_dec");
+    audio_pipeline_register(s_rec_desc.player, raw_decoder, "raw_decoder");
     audio_pipeline_register(s_rec_desc.player, i2s_stream_writer, "i2s_writer");
 
-    const char *link_tag[3] = {"raw_write", "player_dec", "i2s_writer"};
+    const char *link_tag[3] = {"raw_write", "raw_decoder", "i2s_writer"};
     audio_pipeline_link(s_rec_desc.player, &link_tag[0], 3);
     audio_pipeline_run(s_rec_desc.player);
     return s_rec_desc.player;
+}
+
+static esp_err_t audio_rec_setdown_player(void)
+{
+    if (s_rec_desc.player == NULL)
+    {
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "## audio rec player setdown");
+    audio_pipeline_handle_t player = s_rec_desc.player;
+    audio_rec_desc_lock();
+    s_rec_desc.player = NULL;
+    s_rec_desc.raw_write = NULL;
+    audio_rec_desc_unlock();
+    audio_pipeline_stop(player);
+    audio_pipeline_wait_for_stop(player);
+    audio_pipeline_terminate(player);
+    audio_element_handle_t raw_write = audio_pipeline_get_el_by_tag(player, "raw_write");
+    audio_element_handle_t player_dec = audio_pipeline_get_el_by_tag(player, "player_dec");
+    audio_element_handle_t i2s_writer = audio_pipeline_get_el_by_tag(player, "i2s_writer");
+    audio_pipeline_unregister(player, raw_write);
+    audio_pipeline_unregister(player, player_dec);
+    audio_pipeline_unregister(player, i2s_writer);
+    audio_pipeline_deinit(player);
+    audio_element_deinit(raw_write);
+    audio_element_deinit(player_dec);
+    audio_element_deinit(i2s_writer);
+    return ESP_OK;
 }
 
 static void audio_rec_voice_read_task(void *args)
@@ -224,6 +262,34 @@ static void audio_rec_voice_read_task(void *args)
     }
 
     free(voiceData);
+    vTaskDelete(NULL);
+}
+
+static void audio_rec_raw_cache_task(void *args)
+{
+    ESP_LOGI(TAG, "## audio rec raw cache task start");
+
+    int cache_len = AUDIO_REC_PLAYER_CACHE_SIZE / 10;
+    uint8_t* cache_buff = audio_calloc(1, cache_len);
+
+    while (!s_rec_desc.voice_exit) {
+        if(s_rec_desc.raw_write_cache == NULL) {
+            ESP_LOGE(TAG, "## raw write cache is null");
+            break;
+        }
+        int len = rb_read(s_rec_desc.raw_write_cache, (char*)cache_buff, cache_len, pdTICKS_TO_MS(100));
+        if(len < 0) {
+            ESP_LOGE(TAG, "## raw write cache read failed");
+            break;
+        }
+        if(s_rec_desc.raw_write) {
+            if(raw_stream_write(s_rec_desc.raw_write, (char*)cache_buff, len) < 0) {
+                ESP_LOGE(TAG, "## raw write failed");
+            }
+        }
+    }
+    ESP_LOGI(TAG, "## audio rec raw cache task end");
+    free(cache_buff);
     vTaskDelete(NULL);
 }
 
@@ -316,6 +382,7 @@ static audio_rec_handle_t audio_rec_start_recorder(void)
     rsp_filter_cfg_t rsp_cfg = DEFAULT_RESAMPLE_FILTER_CONFIG();
     rsp_cfg.src_rate = CODEC_ADC_SAMPLE_RATE;
     rsp_cfg.dest_rate = 16000;
+    rsp_cfg.task_prio = 18;
 #if (CONFIG_ESP32_S3_KORVO2_V3_BOARD == 1) && (CONFIG_AFE_MIC_NUM == 2)
     rsp_cfg.mode = RESAMPLE_UNCROSS_MODE;
     rsp_cfg.src_ch = 4;
@@ -350,6 +417,9 @@ static audio_rec_handle_t audio_rec_start_recorder(void)
     recorder_sr_cfg.multinet_init = AUDIO_REC_MULTINET_ENABLE;
     recorder_sr_cfg.afe_cfg.aec_init = RECORD_HARDWARE_AEC;
     recorder_sr_cfg.afe_cfg.agc_mode = AFE_MN_PEAK_NO_AGC;
+    recorder_sr_cfg.afe_cfg.afe_perferred_priority = 17;
+    recorder_sr_cfg.feed_task_prio = 18;
+    recorder_sr_cfg.fetch_task_prio = 19;
 #if (CONFIG_ESP32_S3_KORVO2_V3_BOARD == 1) && (CONFIG_AFE_MIC_NUM == 1)
     recorder_sr_cfg.afe_cfg.pcm_config.mic_num = 1;
     recorder_sr_cfg.afe_cfg.pcm_config.ref_num = 1;
@@ -455,6 +525,15 @@ bool audio_rec_init(audio_rec_conf_t conf)
         return false;
     }
 
+    if(s_rec_desc.raw_write_cache == NULL) {
+        s_rec_desc.raw_write_cache = rb_create(AUDIO_REC_PLAYER_CACHE_SIZE, 1);
+        ESP_LOGI(TAG, "## create raw write cache!");
+    }
+    if(s_rec_desc.raw_write_cache == NULL) {
+        ESP_LOGE(TAG, "## create raw write cache failed!");
+        return false;
+    }
+
     s_rec_desc.voice_ctrl = xQueueCreate(3, sizeof(int));
     if(s_rec_desc.voice_ctrl == NULL) {
         ESP_LOGE(TAG, "## create voice ctrl queue failed!");
@@ -462,6 +541,7 @@ bool audio_rec_init(audio_rec_conf_t conf)
     }
 
     audio_thread_create(NULL, "read_task", audio_rec_voice_read_task, NULL, 4 * 1024, 5, true, 0);
+    audio_thread_create(NULL, "raw_cache", audio_rec_raw_cache_task, NULL, 4 * 1024, 21, true, 0);
     s_rec_desc.is_init = true;
     return true;
 }
@@ -505,6 +585,12 @@ bool audio_rec_deinit(void)
         vQueueDelete(s_rec_desc.voice_ctrl);
         s_rec_desc.voice_ctrl = NULL;
     }
+    
+    if(s_rec_desc.raw_write_cache != NULL) {
+        ESP_LOGW(TAG, "## destory raw write cache");
+        rb_destroy(s_rec_desc.raw_write_cache);
+        s_rec_desc.raw_write_cache = NULL;
+    }
 
     if(s_rec_desc.command_word) {
         ESP_LOGW(TAG, "## free command word memory");
@@ -519,6 +605,16 @@ bool audio_rec_deinit(void)
     }
 
     return true;
+}
+
+bool audio_rec_install_player(void)
+{
+    return audio_rec_setup_player() != NULL ? true : false;
+}
+
+bool audio_rec_unstall_player(void)
+{
+    return audio_rec_setdown_player() == ESP_OK ? true : false;
 }
 
 bool audio_rec_set_volume(int volume)
@@ -544,9 +640,37 @@ bool audio_rec_play(void* src, int len)
         ESP_LOGW(TAG, "## audio rec is not init");
         return true;
     }
-    return raw_stream_write(s_rec_desc.raw_write, src, len) < 0 ? false : true;
+
+    if(s_rec_desc.player == NULL) {
+        ESP_LOGW(TAG, "## audio rec player is not init");
+        return true;
+    }
+
+    if(s_rec_desc.raw_write == NULL) {
+        ESP_LOGW(TAG, "## audio rec raw is not init");
+        return true;
+    }
+
+    if(s_rec_desc.raw_write_cache == NULL) {
+        ESP_LOGW(TAG, "## audio rec raw write cache is not init");
+        return true;
+    }
+    // return raw_stream_write(s_rec_desc.raw_write, src, len) < 0 ? false : true;
+    return rb_write(s_rec_desc.raw_write_cache, src, len, portMAX_DELAY) < 0 ? false : true;
 }
 
+bool audio_rec_enter_sleep(void)
+{
+    if(!s_rec_desc.is_init) {
+        ESP_LOGW(TAG, "## audio rec is not init");
+        return false;
+    }
 
+    if(s_rec_desc.recorder == NULL) {
+        ESP_LOGW(TAG, "## audio rec is not null");
+        return false;
+    }
 
+    return audio_recorder_trigger_stop(s_rec_desc.recorder) == ESP_OK ? true : false; // vad must enable!
+}
 
