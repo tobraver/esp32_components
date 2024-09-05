@@ -19,6 +19,7 @@
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
 #include "driver/sdmmc_defs.h"
+#include "sys/stat.h"
 
 static const char *TAG = "http_sdmmc";
 
@@ -263,9 +264,12 @@ esp_err_t http_sdmmc_download(char* url, char* file)
 
     audio_pipeline_run(pipeline);
 
+    ESP_LOGI(TAG, "waiting for download....");
     uint32_t download_timeout = 2*60; // [seconds]
     uint32_t download_flag = false;
-    audio_element_state_t el_state;
+    uint32_t download_file_size = 0, sdmmc_file_size = 0;
+    audio_element_state_t el_state = AEL_STATE_RUNNING;
+    audio_element_info_t el_info = { 0 };
     while (download_timeout--) {
         el_state = audio_element_get_state(http_reader);
         if(el_state == AEL_STATE_ERROR) {
@@ -273,6 +277,10 @@ esp_err_t http_sdmmc_download(char* url, char* file)
             break;
         } else if(el_state == AEL_STATE_RUNNING) {
             ESP_LOGI(TAG, "downloading url %s", url);
+            if(download_file_size == 0) {
+                audio_element_getinfo(http_reader, &el_info);
+                download_file_size = el_info.total_bytes;
+            }
         }
 
         el_state = audio_element_get_state(fatfs_writer);
@@ -281,7 +289,6 @@ esp_err_t http_sdmmc_download(char* url, char* file)
             break;
         } else if(el_state == AEL_STATE_FINISHED) {
             ESP_LOGI(TAG, "fatfs write finish");
-            download_flag = true;
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -298,6 +305,16 @@ esp_err_t http_sdmmc_download(char* url, char* file)
     audio_element_deinit(fatfs_writer);
     audio_element_deinit(http_reader);
 
+    struct stat file_stat = { 0 };
+    stat(file, &file_stat);
+    sdmmc_file_size = file_stat.st_size;
+    if(sdmmc_file_size && sdmmc_file_size == download_file_size) {
+        download_flag = true;
+    } else {
+        ESP_LOGE(TAG, "download file is incomplete, sdmmc file size %u, download file size %u", sdmmc_file_size, download_file_size);
+    }
+
+    ESP_LOGI(TAG, "download finish....");
     return download_flag ? ESP_OK : ESP_FAIL;
 
 _create_failed:
