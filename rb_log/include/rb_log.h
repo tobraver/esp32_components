@@ -3,10 +3,12 @@
 
 #include "stdio.h"
 
-// log svr debug enable
+// log debug enable
 #define RB_LOG_DEBUG_ENABLE  0
 // log to buffer enable
 #define RB_LOG_BUFF_ENABLE   1
+// log buffer use psram
+#define RB_LOG_BUFF_PSRAM    0
 // log buffer size
 #define RB_LOG_BUFF_SIZE     (5 * 1024)
 // log to uart enable

@@ -5,6 +5,7 @@
 #include "freertos/ringbuf.h"
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 // cache size with stack memory
 #define RB_LOG_CACHE_SIZE          256
@@ -15,7 +16,7 @@
 
 static RingbufHandle_t s_rb_log = NULL;
 
-static int rb_log_prepare_buff(int size)
+static int _rb_log_prepare_buff(int size)
 {
     int ret = -1;
     int retry = 30;
@@ -37,14 +38,14 @@ static int rb_log_prepare_buff(int size)
     return ret;
 }
 
-static int rb_log_vprintf(const char *fmt, va_list args)
+static int _rb_log_vprintf(const char *fmt, va_list args)
 {
     int size = 0;
 #if RB_LOG_BUFF_ENABLE
     char cache[RB_LOG_CACHE_SIZE] = { 0 };
     size = vsnprintf(cache, sizeof(cache) - 1, fmt, args);
     if(s_rb_log && (size > 0) && (size < RB_LOG_CACHE_SIZE)) {
-        if(rb_log_prepare_buff(size) < 0) {
+        if(_rb_log_prepare_buff(size) < 0) {
 #if RB_LOG_DEBUG_ENABLE
             printf("## log server preare buffer failed!\n");
 #endif
@@ -61,17 +62,25 @@ static int rb_log_vprintf(const char *fmt, va_list args)
 
 int rb_log_init(void)
 {
-    int ret = 0;
+    int ret = -1;
 #if RB_LOG_BUFF_ENABLE
-    s_rb_log = xRingbufferCreate(RB_LOG_BUFF_SIZE, RINGBUF_TYPE_NOSPLIT);
+    #if RB_LOG_BUFF_PSRAM
+        StaticRingbuffer_t *buff_struct = (StaticRingbuffer_t *)heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        uint8_t *buff_storage = (uint8_t *)heap_caps_malloc(RB_LOG_BUFF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_rb_log = xRingbufferCreateStatic(RB_LOG_BUFF_SIZE, RINGBUF_TYPE_NOSPLIT, buff_storage, buff_struct);
+    #else
+        StaticRingbuffer_t *buff_struct = (StaticRingbuffer_t *)malloc(sizeof(StaticRingbuffer_t));
+        uint8_t *buff_storage = (uint8_t *)malloc(RB_LOG_BUFF_SIZE);
+        s_rb_log = xRingbufferCreateStatic(RB_LOG_BUFF_SIZE, RINGBUF_TYPE_NOSPLIT, buff_storage, buff_struct);
+    #endif
     if(s_rb_log == NULL) {
-        ret = -1;
         printf("## log server ring buffer create failed!");
     }
 #endif
 #if RB_LOG_BUFF_ENABLE || RB_LOG_UART_ENABLE
-    esp_log_set_vprintf(rb_log_vprintf);
+    esp_log_set_vprintf(_rb_log_vprintf);
 #endif
+    ret = 0;
     return ret;
 }
 
