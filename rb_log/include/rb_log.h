@@ -11,8 +11,6 @@
 #define RB_LOG_BUFF_PSRAM    0
 // log buffer size
 #define RB_LOG_BUFF_SIZE     (5 * 1024)
-// log to uart enable
-#define RB_LOG_UART_ENABLE   1
 
 #if __cplusplus
 extern "C" {

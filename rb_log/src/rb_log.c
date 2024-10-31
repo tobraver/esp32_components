@@ -6,6 +6,21 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "driver/uart.h"
+
+// memory free
+#define RB_LOG_MEM_FREE(addr)   if(addr) { \
+                                    free(addr); \
+                                }
+// error exit
+static bool s_debuge_enable = RB_LOG_DEBUG_ENABLE;
+#define RB_LOG_ERROR_EXIT(a, msg)   if(a) { \
+                                        RB_LOG_MEM_FREE(heap_cache); \
+                                        if(s_debuge_enable && msg) { \
+                                            printf("%s\n", msg); \
+                                        } \
+                                        return vprintf(fmt, args); \
+                                    }
 
 // cache size with stack memory
 #define RB_LOG_CACHE_SIZE          256
@@ -20,7 +35,7 @@ static int _rb_log_prepare_buff(int size)
 {
     int ret = -1;
     int retry = 30;
-    if((s_rb_log == NULL) || (size < 0)) {
+    if((s_rb_log == NULL) || (size <= 0)) {
         return ret;
     }
     do {
@@ -41,12 +56,19 @@ static int _rb_log_prepare_buff(int size)
 static int _rb_log_vprintf(const char *fmt, va_list args)
 {
     int size = 0;
-#if RB_LOG_BUFF_ENABLE
     int is_heap = 0;
     char* heap_cache = NULL;
     char stack_cache[RB_LOG_CACHE_SIZE] = { 0 };
     int cache_size = RB_LOG_CACHE_SIZE;
+    RB_LOG_ERROR_EXIT(s_rb_log == NULL, \
+        "## rb log ring buffer is null!");
+
+    // get format string size
     size = vsnprintf(NULL, 0, fmt, args);
+    RB_LOG_ERROR_EXIT(size <= 0, \
+        "## rb log format failed!");
+    
+    // if size is larger than RB_LOG_CACHE_SIZE - 1, use malloc memory
     if(size > cache_size - 1) {
         is_heap = 1;
         cache_size = size + 1;
@@ -57,40 +79,27 @@ static int _rb_log_vprintf(const char *fmt, va_list args)
 #else
         heap_cache = (char*)malloc(cache_size);
 #endif // RB_LOG_BUFF_PSRAM
-        if(heap_cache == NULL) {
-#if RB_LOG_DEBUG_ENABLE
-            printf("## rb log heap cache malloc failed!");
-#endif // RB_LOG_DEBUG_ENABLE
-        } else {
-            size = vsprintf(heap_cache, fmt, args);
-        }
-    } else {
-        size = vsprintf(stack_cache, fmt, args);
+        RB_LOG_ERROR_EXIT(heap_cache == NULL, \
+            "## rb log heap cache malloc failed!");
     }
-    if(s_rb_log && (size > 0) && (size < cache_size)) {
-        if(_rb_log_prepare_buff(size) < 0) {
-#if RB_LOG_DEBUG_ENABLE
-            printf("## rb log preare buffer failed!\n");
-#endif // RB_LOG_DEBUG_ENABLE
-        } else {
-            if(is_heap) {
-                if(heap_cache) {
-                    heap_cache[size] = '\0'; // to string
-                    xRingbufferSend(s_rb_log, heap_cache, size + 1, RB_LOG_BUFF_WR_TIMEOUT);
-                }
-            } else {
-                stack_cache[size] = '\0'; // to string
-                xRingbufferSend(s_rb_log, stack_cache, size + 1, RB_LOG_BUFF_WR_TIMEOUT);
-            }
-        }
-        if(is_heap && heap_cache) {
-            free(heap_cache);
-        }
-    }
-#endif // RB_LOG_BUFF_ENABLE
-#if RB_LOG_UART_ENABLE
-    size = vprintf(fmt, args);
-#endif // RB_LOG_UART_ENABLE
+    char* cache = is_heap ? heap_cache : stack_cache;
+    size = vsprintf(cache, fmt, args);
+
+    RB_LOG_ERROR_EXIT((size <= 0) || (size >= cache_size), \
+            "## rb log format to cache failed!");
+
+    // ring buffer prepare
+    RB_LOG_ERROR_EXIT(_rb_log_prepare_buff(size) < 0, \
+        "## rb log preare buffer failed!");
+
+    // write to ring buffer
+    xRingbufferSend(s_rb_log, cache, size + 1, RB_LOG_BUFF_WR_TIMEOUT);
+
+    // write to uart [performance]
+    // vprintf(fmt, args);
+    fwrite(cache, size, 1, stdout);
+
+    RB_LOG_MEM_FREE(heap_cache);
     return size;
 }
 
@@ -110,10 +119,8 @@ int rb_log_init(void)
     if(s_rb_log == NULL) {
         printf("## rb log ring buffer create failed!");
     }
-#endif // RB_LOG_BUFF_ENABLE
-#if RB_LOG_BUFF_ENABLE || RB_LOG_UART_ENABLE
     esp_log_set_vprintf(_rb_log_vprintf);
-#endif // RB_LOG_BUFF_ENABLE || RB_LOG_UART_ENABLE
+#endif // RB_LOG_BUFF_ENABLE
     ret = 0;
     return ret;
 }
@@ -121,6 +128,9 @@ int rb_log_init(void)
 int rb_log_get_msg_num(void)
 {
     UBaseType_t msg_num = 0;
+    if(s_rb_log == NULL) {
+        return msg_num;
+    }
     vRingbufferGetInfo(s_rb_log, NULL, NULL, NULL, NULL, &msg_num);
     return msg_num;
 }
