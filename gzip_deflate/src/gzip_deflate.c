@@ -252,6 +252,11 @@ esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32
     handle->stream.next_in = data;
     handle->stream.avail_in = len;
 
+    if(data && len) {
+        handle->crc32 = mz_crc32(handle->crc32, data, len);
+        handle->issize += len;
+    }
+
     do {
         handle->stream.next_out = handle->buffer;
         handle->stream.avail_out = GZIP_DEFLATE_BUFF_SIZE;
@@ -264,10 +269,6 @@ esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32
                 ESP_LOGE(TAG, "gzip deflate stream out failed.");
                 return ESP_FAIL;
             }
-        }
-        if(data && len) {
-            handle->crc32 = mz_crc32(handle->crc32, data, len);
-            handle->issize += len;
         }
     } while(handle->stream.avail_out == 0);
 
