@@ -59,6 +59,15 @@ void sm4_encrypt(const SM4_KEY *key, const unsigned char in[16], unsigned char o
 	PUTU32(out + 12, x2);
 }
 
+void sm4_encrypt_blocks(const SM4_KEY *key, const uint8_t *in, size_t nblocks, uint8_t *out)
+{
+	while (nblocks--) {
+		sm4_encrypt(key, in, out);
+		in += 16;
+		out += 16;
+	}
+}
+
 /* caller make sure counter not overflow */
 void sm4_ctr32_encrypt_blocks(const unsigned char *in, unsigned char *out,
 	size_t blocks, const SM4_KEY *key, const unsigned char iv[16])

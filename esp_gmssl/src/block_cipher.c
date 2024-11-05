@@ -59,12 +59,12 @@ const BLOCK_CIPHER *BLOCK_CIPHER_sm4(void) {
 	return &sm4_block_cipher_object;
 }
 
-static int aes128_set_encrypt_key(AES_KEY *aes_key, const uint8_t key[16]) {
-	return aes_set_encrypt_key(aes_key, key, 16);
+static void aes128_set_encrypt_key(AES_KEY *aes_key, const uint8_t key[16]) {
+	aes_set_encrypt_key(aes_key, key, 16);
 }
 
-static int aes128_set_decrypt_key(AES_KEY *aes_key, const uint8_t key[16]) {
-	return aes_set_decrypt_key(aes_key, key, 16);
+static void aes128_set_decrypt_key(AES_KEY *aes_key, const uint8_t key[16]) {
+	aes_set_decrypt_key(aes_key, key, 16);
 }
 
 static const BLOCK_CIPHER aes128_block_cipher_object = {
