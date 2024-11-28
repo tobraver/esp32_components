@@ -48,6 +48,7 @@ typedef struct {
     http_upgrade_write_resume_t write_resume;
     http_upgrade_read_md5_t read_md5;
     http_upgrade_write_md5_t write_md5;
+    http_upgrade_event_cb_t event_cb;
 } http_upgrade_desc_t;
 
 static http_upgrade_desc_t s_upgrade_desc;
@@ -116,6 +117,57 @@ static esp_err_t _http_upgrade_set_md5(const char* label, char md5[33])
     return ret;
 }
 
+static esp_err_t _http_upgrade_event_cb(const char* label, http_upgrade_event_t* event)
+{
+    esp_err_t ret = ESP_FAIL;
+    if(label == NULL || event == NULL) {
+        return ret;
+    }
+    if(s_upgrade_desc.event_cb) {
+        ret = s_upgrade_desc.event_cb(label, event);
+    }
+    return ret;
+}
+
+static esp_err_t _http_upgrade_enter_event_cb(const char* label)
+{
+    http_upgrade_event_t event = {
+        .type = HTTP_UPGRADE_EVENT_TYPE_ENTER,
+    };
+    return _http_upgrade_event_cb(label, &event);
+}
+
+static esp_err_t _http_upgrade_download_event_cb(const char* label, uint32_t total, uint32_t wrote)
+{
+    uint32_t progress = wrote * 100 / total;
+    http_upgrade_event_t event = {
+        .type = HTTP_UPGRADE_EVENT_TYPE_DOWNLOAD,
+        .data = &progress,
+        .len = sizeof(progress),
+    };
+    return _http_upgrade_event_cb(label, &event);
+}
+
+static esp_err_t _http_upgrade_resume_event_cb(const char* label, uint32_t offset)
+{
+    http_upgrade_event_t event = {
+        .type = HTTP_UPGRADE_EVENT_TYPE_RESUME,
+        .data = &offset,
+        .len = sizeof(offset),
+    };
+    return _http_upgrade_event_cb(label, &event);
+}
+
+static esp_err_t _http_upgrade_md5_event_cb(const char* label, uint32_t success)
+{
+    http_upgrade_event_t event = {
+        .type = HTTP_UPGRADE_EVENT_TYPE_MD5,
+        .data = &success,
+        .len = sizeof(success),
+    };
+    return _http_upgrade_event_cb(label, &event);
+}
+
 static const esp_partition_t* _http_upgrade_find_partition(ota_node_attr_t *node)
 {
     const esp_partition_t* partition = NULL;
@@ -153,7 +205,7 @@ static int _http_upgrade_event_handle(http_stream_event_msg_t *msg)
     if(msg->event_id == HTTP_STREAM_PRE_REQUEST) {
         char range[64] = {0};
         snprintf(range, sizeof(range), "bytes=%u-", context->resume_offset);
-        printf("## range: %s\n", range);
+        // printf("## range: %s\n", range);
         esp_http_client_set_header(msg->http_client, "Range", range);
     }
     return ESP_OK;
@@ -190,7 +242,7 @@ static ota_service_err_reason_t http_upgrade_partition_prepare(void **handle, ot
     }
     if(cancel_resume) {
         http_upgrade_cancel_resume(node->label);
-        ESP_LOGW(TAG, "partition %s md5 not match, need resume", node->label);
+        ESP_LOGW(TAG, "partition %s find lastest url.", node->label);
     }
     _http_upgrade_set_md5(node->label, md5_1);
 
@@ -247,16 +299,18 @@ static ota_service_err_reason_t _http_upgrade_partition_write(http_upgrade_ctx_t
     esp_err_t ret = ESP_OK;
     uint32_t write_offset = context->wrote_size + context->resume_offset;
     // must erase the partition before writing to it
-    uint32_t first_sector = write_offset / SPI_FLASH_SEC_SIZE;
-    uint32_t last_sector = (write_offset + r_size) / SPI_FLASH_SEC_SIZE;
-    if ((write_offset % SPI_FLASH_SEC_SIZE) == 0) {
-        ret = esp_partition_erase_range(context->partition, write_offset, ((last_sector - first_sector) + 1) * SPI_FLASH_SEC_SIZE);
-    } else if (first_sector != last_sector) {
-        ret = esp_partition_erase_range(context->partition, (first_sector + 1) * SPI_FLASH_SEC_SIZE, (last_sector - first_sector) * SPI_FLASH_SEC_SIZE);
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "(%s) partition %s erase failed", __FUNCTION__, context->partition->label);
-        return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
+    if(write_offset + r_size < context->partition->size) {
+        uint32_t first_sector = write_offset / SPI_FLASH_SEC_SIZE;
+        uint32_t last_sector = (write_offset + r_size) / SPI_FLASH_SEC_SIZE;
+        if ((write_offset % SPI_FLASH_SEC_SIZE) == 0) {
+            ret = esp_partition_erase_range(context->partition, write_offset, ((last_sector - first_sector) + 1) * SPI_FLASH_SEC_SIZE);
+        } else if (first_sector != last_sector) {
+            ret = esp_partition_erase_range(context->partition, (first_sector + 1) * SPI_FLASH_SEC_SIZE, (last_sector - first_sector) * SPI_FLASH_SEC_SIZE);
+        }
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "(%s) partition %s erase failed, error: %s", __FUNCTION__, context->partition->label, esp_err_to_name(ret));
+            return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
+        }
     }
     // write data to partition
     if (esp_partition_write(context->partition, write_offset, context->read_buf, r_size) == ESP_OK) {
@@ -315,7 +369,11 @@ static ota_service_err_reason_t http_upgrade_partition_need_upgrade(void *handle
 
     // write incoming header to partition
     memcpy(context->read_buf, incoming_header, READER_BUF_LEN);
-    return _http_upgrade_partition_write(context, READER_BUF_LEN);
+    if(_http_upgrade_partition_write(context, READER_BUF_LEN) != OTA_SERV_ERR_REASON_SUCCESS) {
+        return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
+    }
+    _http_upgrade_enter_event_cb(node->label);
+    return OTA_SERV_ERR_REASON_SUCCESS;
 }
 
 static ota_service_err_reason_t http_upgrade_partition_exec_upgrade(void *handle, ota_node_attr_t *node)
@@ -334,17 +392,18 @@ static ota_service_err_reason_t http_upgrade_partition_exec_upgrade(void *handle
 
     // featch package from server
     while ((r_size = audio_element_input(context->r_stream, context->read_buf, READER_BUF_LEN)) > 0) {
-        ESP_LOGI(TAG, "write %d, r_size %d", context->wrote_size, r_size);
+        // ESP_LOGI(TAG, "write %d, r_size %d", context->wrote_size, r_size);
         if(_http_upgrade_partition_write(context, r_size) != OTA_SERV_ERR_REASON_SUCCESS) {
             return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
         }
+        _http_upgrade_download_event_cb(node->label, total_bytes, context->wrote_size);
     }
     if (r_size == AEL_IO_OK || r_size == AEL_IO_DONE) {
         if(total_bytes != context->wrote_size) {
             ESP_LOGE(TAG, "partition %s upgrade failed, incomplete image, write %d, total: %d", context->partition->label, context->wrote_size, total_bytes);
             return OTA_SERV_ERR_REASON_PARTITION_WT_FAIL;
         }
-        ESP_LOGI(TAG, "partition %s upgrade successes", node->label);
+        ESP_LOGI(TAG, "partition %s download successes", node->label);
         return OTA_SERV_ERR_REASON_SUCCESS;
     } else {
         return OTA_SERV_ERR_REASON_STREAM_RD_FAIL;
@@ -426,9 +485,11 @@ static ota_service_err_reason_t ota_data_partition_verify_md5(void *handle, ota_
     ESP_LOGI(TAG, "md5_1: %s, md5_2: %s", md5_1, md5_2);
     if(strcmp(md5_1, md5_2)) {
         ESP_LOGE(TAG, "partition %s md5 verify failed!", context->partition->label);
+        _http_upgrade_md5_event_cb(node->label, 0);
         return OTA_SERV_ERR_REASON_UNKNOWN;
     }
     ESP_LOGI(TAG, "partition %s md5 verify success!", context->partition->label);
+    _http_upgrade_md5_event_cb(node->label, 1);
     
     if(node->type != ESP_PARTITION_TYPE_APP) {
         http_upgrade_resume_t resume = _http_upgrade_get_resume(node->label);
@@ -487,6 +548,7 @@ static ota_service_err_reason_t ota_data_partition_finish(void *handle, ota_node
         resume.status = HTTP_UPGRADE_STATUS_NEED_RESUME;
         resume.offset = (resume.offset >> 12) << 12; // 4k align
         ESP_LOGW(TAG, "partition %s upgrade break, offset: %d, write: %d, resume: %d, enter resume mode.", node->label, context->resume_offset, context->wrote_size, resume.offset);
+        _http_upgrade_resume_event_cb(node->label, resume.offset);
     }
     _http_upgrade_set_resume(node->label, resume);
     if(result == OTA_SERV_ERR_REASON_SUCCESS) {
@@ -515,6 +577,7 @@ esp_err_t http_upgrade_init(http_upgrade_config_t config)
     s_upgrade_desc.write_resume = config.write_resume;
     s_upgrade_desc.read_md5 = config.read_md5;
     s_upgrade_desc.write_md5 = config.write_md5;
+    s_upgrade_desc.event_cb = config.event_cb;
     return ESP_OK;
 }
 
