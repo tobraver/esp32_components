@@ -1,4 +1,4 @@
-#include "sntp.h"
+#include "utils_sntp.h"
 #include "esp_sntp.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -14,7 +14,7 @@ static void initialize_sntp(void)
 {
     ESP_LOGI(TAG, "Initializing SNTP");
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_setservername(0, UTILS_SNTP_SERVER);
     sntp_set_time_sync_notification_cb(time_sync_notification_cb);
 #ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
     sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
@@ -44,6 +44,8 @@ static void obtain_time(void)
         vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
     time(&now);
+    setenv("TZ", UTILS_SNTP_TIME_ZONE, 1);
+    tzset();
     localtime_r(&now, &timeinfo);
 }
 
