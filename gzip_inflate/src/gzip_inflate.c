@@ -384,7 +384,7 @@ esp_err_t gzip_inflate(uint8_t *in, int inlen, uint8_t *out, int *outlen)
     }
     int status = mz_inflateInit2(&gzip.stream, -MZ_DEFAULT_WINDOW_BITS);
     if(status != MZ_OK) {
-        ESP_LOGE(TAG, "gzip inflate init error, error: %s", mz_error(status));
+        ESP_LOGE(TAG, "gzip inflate init error, reason: %s", mz_error(status));
         return ret;
     }
     gzip.stream.next_in = (uint8_t *)in + header_size;
@@ -393,7 +393,7 @@ esp_err_t gzip_inflate(uint8_t *in, int inlen, uint8_t *out, int *outlen)
     gzip.stream.avail_out = *outlen;
     status = mz_inflate(&gzip.stream, MZ_FINISH);
     if(status != MZ_STREAM_END) {
-        ESP_LOGE(TAG, "gzip inflate error, error: %s", mz_error(status));
+        ESP_LOGE(TAG, "gzip inflate error, reason: %s", mz_error(status));
     } else {
         ret = ESP_OK;
         *outlen = gzip.stream.total_out;
