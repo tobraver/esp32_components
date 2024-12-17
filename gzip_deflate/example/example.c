@@ -21,4 +21,10 @@ void app_main(void)
     }
     gzip_deflate_write(handle, (uint8_t*)"finish", strlen("finish"), 1);
     gzip_deflate_destroy(handle);
+
+    char* str = "Hello world!";
+    int len = 2048;
+    uint8_t* buff = (uint8_t*)malloc(len);
+    gzip_deflate((uint8_t*)str, strlen(str), buff, &len);
+    ESP_LOG_BUFFER_HEX("gzip", buff, len);
 }

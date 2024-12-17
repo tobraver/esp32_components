@@ -80,7 +80,7 @@ typedef struct {
     tinfl_status       m_last_status;
 } inflate_state;
 
-const char *mz_error(int err)
+static const char *mz_error(int err)
 {
     static struct
     {

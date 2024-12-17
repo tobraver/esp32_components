@@ -41,7 +41,7 @@ typedef mz_stream *mz_streamp;
 #define GZIP_DEFLATE_LEVEL      MZ_DEFAULT_LEVEL // -1 ~ 10
 #define GZIP_DEFLATE_BUFF_SIZE  1024
 
-typedef esp_err_t(*gzip_stream_out_t)(uint8_t* data, uint32_t len);
+typedef esp_err_t(*gzip_stream_out_t)(uint8_t* data, uint32_t len, void* user_ctx);
 
 typedef struct {
     uint8_t id1;
@@ -57,9 +57,11 @@ typedef struct {
     gzip_header_t header;
     uint32_t      crc32;
     uint32_t      issize;
+    uint32_t      zipsize;
     mz_stream     stream;
     uint8_t       buffer[GZIP_DEFLATE_BUFF_SIZE];
     gzip_stream_out_t stream_out;
+    void*         user_ctx;
 } gzip_deflate_t;
 
 typedef gzip_deflate_t* gzip_deflate_handle_t;
@@ -68,9 +70,10 @@ typedef gzip_deflate_t* gzip_deflate_handle_t;
 extern "C" {
 #endif
 
-gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out);
+gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out, void* user_ctx);
 esp_err_t gzip_deflate_destroy(gzip_deflate_handle_t handle);
 esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32_t len, int is_finish);
+esp_err_t gzip_deflate(uint8_t *in, int inlen, uint8_t *out, int *outlen);
 
 #if __cplusplus
 }

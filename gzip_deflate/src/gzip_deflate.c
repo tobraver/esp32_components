@@ -43,6 +43,23 @@ static int mz_deflateInit2(mz_streamp pStream, int level, int method, int window
 static int mz_deflate(mz_streamp pStream, int flush);
 static int mz_deflateEnd(mz_streamp pStream);
 
+static const char *mz_error(int err)
+{
+    static struct
+    {
+        int m_err;
+        const char *m_pDesc;
+    } s_error_descs[] =
+        {
+          { MZ_OK, "" }, { MZ_STREAM_END, "stream end" }, { MZ_NEED_DICT, "need dictionary" }, { MZ_ERRNO, "file error" }, { MZ_STREAM_ERROR, "stream error" }, { MZ_DATA_ERROR, "data error" }, { MZ_MEM_ERROR, "out of memory" }, { MZ_BUF_ERROR, "buf error" }, { MZ_VERSION_ERROR, "version error" }, { MZ_PARAM_ERROR, "parameter error" }
+        };
+    mz_uint i;
+    for (i = 0; i < sizeof(s_error_descs) / sizeof(s_error_descs[0]); ++i)
+        if (s_error_descs[i].m_err == err)
+            return s_error_descs[i].m_pDesc;
+    return "";
+}
+
 static const mz_uint s_tdefl_num_probes[11] = { 0, 1, 6, 32, 16, 32, 128, 256, 512, 768, 1500 };
 
 /* level may actually range from [0,10] (10 is a "hidden" max level, where we want a bit more compression and it's fine if throughput to fall off a cliff on some files). */
@@ -184,7 +201,7 @@ typedef enum {
     GZIP_OS_Unknown = 0xFF
 } gzip_os_t;
 
-gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out)
+gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out, void* user_ctx)
 {
     gzip_deflate_handle_t handle = (gzip_deflate_handle_t)malloc(sizeof(gzip_deflate_t));
     if(handle == NULL) {
@@ -203,6 +220,7 @@ gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out)
     handle->header.os = GZIP_OS_Unknown;
     handle->crc32 = MZ_CRC32_INIT;
     handle->issize = 0;
+    handle->zipsize = sizeof(handle->header) + sizeof(handle->crc32) + sizeof(handle->issize);
 
     memset(&handle->stream, 0, sizeof(handle->stream));
     if(mz_deflateInit2(&handle->stream, GZIP_DEFLATE_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) {
@@ -210,9 +228,10 @@ gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out)
         goto create_failed;
     }
 
+    handle->user_ctx = user_ctx;
     handle->stream_out = stream_out;
     if(handle->stream_out) {
-        if(handle->stream_out((uint8_t*)&handle->header, sizeof(handle->header)) != ESP_OK) {
+        if(handle->stream_out((uint8_t*)&handle->header, sizeof(handle->header), handle->user_ctx) != ESP_OK) {
             ESP_LOGE(TAG, "gzip deflate stream out failed.");
             goto create_failed;
         }
@@ -221,6 +240,7 @@ gzip_deflate_handle_t gzip_deflate_create(gzip_stream_out_t stream_out)
     return handle;
 create_failed:
     if(handle) {
+        mz_deflateEnd(&handle->stream);
         free(handle);
         handle = NULL;
     }
@@ -240,6 +260,7 @@ esp_err_t gzip_deflate_destroy(gzip_deflate_handle_t handle)
 esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32_t len, int is_finish)
 {
     int flush = is_finish ? MZ_FINISH : MZ_SYNC_FLUSH;
+    uint32_t deflate_size = 0;
     if(handle == NULL) {
         ESP_LOGE(TAG, "gzip deflate handle is null.");
         return ESP_FAIL;
@@ -264,20 +285,22 @@ esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32
             ESP_LOGE(TAG, "gzip deflate failed.");
             return ESP_FAIL;
         }
+        deflate_size = GZIP_DEFLATE_BUFF_SIZE - handle->stream.avail_out;
+        handle->zipsize += deflate_size;
         if(handle->stream_out) {
-            if(handle->stream_out(handle->buffer, GZIP_DEFLATE_BUFF_SIZE - handle->stream.avail_out) != ESP_OK) {
+            if(handle->stream_out(handle->buffer, deflate_size, handle->user_ctx) != ESP_OK) {
                 ESP_LOGE(TAG, "gzip deflate stream out failed.");
                 return ESP_FAIL;
             }
         }
     } while(handle->stream.avail_out == 0);
 
-    if(is_finish) {
-        if(handle->stream_out((uint8_t*)&handle->crc32, sizeof(handle->crc32)) != ESP_OK) {
+    if(is_finish && handle->stream_out) {
+        if(handle->stream_out((uint8_t*)&handle->crc32, sizeof(handle->crc32), handle->user_ctx) != ESP_OK) {
             ESP_LOGE(TAG, "gzip deflate stream out failed.");
             return ESP_FAIL;
         }
-        if(handle->stream_out((uint8_t*)&handle->issize, sizeof(handle->issize)) != ESP_OK) {
+        if(handle->stream_out((uint8_t*)&handle->issize, sizeof(handle->issize), handle->user_ctx) != ESP_OK) {
             ESP_LOGE(TAG, "gzip deflate stream out failed.");
             return ESP_FAIL;
         }
@@ -285,3 +308,49 @@ esp_err_t gzip_deflate_write(gzip_deflate_handle_t handle, uint8_t* data, uint32
     return ESP_OK;
 }
 
+esp_err_t gzip_deflate(uint8_t *in, int inlen, uint8_t *out, int *outlen)
+{
+    esp_err_t ret = ESP_FAIL;
+    gzip_header_t header = { 0 };
+    uint32_t crc32 = MZ_CRC32_INIT, issize = 0;
+    uint32_t fmt_size = sizeof(gzip_header_t) + sizeof(crc32) + sizeof(issize);
+    if(!in || !inlen || !out || !outlen || (*outlen <= fmt_size)) {
+        ESP_LOGE(TAG, "gzip deflate param error");
+        return ret;
+    }
+    mz_stream stream = { 0 };
+    int status = mz_deflateInit2(&stream, GZIP_DEFLATE_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY);
+    if(status != MZ_OK) {
+        ESP_LOGE(TAG, "gzip deflate init error, reason: %s", mz_error(status));
+        return ret;
+    }
+    stream.next_in = in;
+    stream.avail_in = inlen;
+    stream.next_out = out + sizeof(header);
+    stream.avail_out = *outlen - fmt_size;
+    status = mz_deflate(&stream, MZ_FINISH);
+    if(status != MZ_STREAM_END) {
+        ESP_LOGE(TAG, "gzip deflate error, reason: %s", mz_error(status));
+    } else {
+        ret = ESP_OK;
+        header.id1 = 0x1F;
+        header.id2 = 0x8B;
+        header.compression = MZ_DEFLATED;
+        header.flags = 0;
+        header.mtime[0] = 0x00;
+        header.mtime[1] = 0x00;
+        header.mtime[2] = 0x00;
+        header.mtime[3] = 0x00;
+        header.extra_flags = 0;
+        header.os = GZIP_OS_Unknown;
+        crc32 = mz_crc32(crc32, in, inlen);
+        issize = inlen;
+        memcpy(out, &header, sizeof(header));
+        memcpy(out + sizeof(header) + stream.total_out, &crc32, sizeof(crc32));
+        memcpy(out + sizeof(header) + stream.total_out + sizeof(crc32), &issize, sizeof(issize));
+        *outlen = stream.total_out + fmt_size;
+    }
+    mz_deflateEnd(&stream);
+    ESP_LOGI(TAG, "gzip deflate finish");
+    return ESP_OK;
+}
