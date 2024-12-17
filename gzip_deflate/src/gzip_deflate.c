@@ -352,5 +352,5 @@ esp_err_t gzip_deflate(uint8_t *in, int inlen, uint8_t *out, int *outlen)
     }
     mz_deflateEnd(&stream);
     ESP_LOGI(TAG, "gzip deflate finish");
-    return ESP_OK;
+    return ret;
 }
