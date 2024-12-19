@@ -72,6 +72,10 @@ typedef struct {
 }
 
 audio_element_handle_t udp_stream_init(udp_stream_cfg_t *config);
+int udp_stream_get_read_num(audio_element_handle_t el);
+int udp_stream_get_write_num(audio_element_handle_t el);
+int udp_stream_get_read_bytes(audio_element_handle_t el);
+int udp_stream_get_write_bytes(audio_element_handle_t el);
 
 #ifdef __cplusplus
 }

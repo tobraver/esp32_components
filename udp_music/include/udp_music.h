@@ -20,7 +20,7 @@
 // udp music player timeout [ms]
 #define UDP_MUSIC_PLAYER_TIMEOUT         3000
 // udp music player idle buffer size
-#define UDP_MUSIC_PLAYER_IDLE_BUF_SIZE   20 * 1024
+#define UDP_MUSIC_PLAYER_IDLE_BUF_SIZE   100 * 1024
 // udp music player max buffer size
 #define UDP_MUSIC_PLAYER_MAX_BUF_SIZE    320 * 1024
 // udp music player max bit rate
@@ -55,6 +55,9 @@ extern "C" {
 #endif
 
 esp_err_t udp_music_init(udp_music_conf_t* conf);
+esp_err_t udp_music_busy(void);
+esp_err_t udp_music_wait_idle(uint32_t timeout);
+esp_err_t udp_music_stop(uint32_t timeout);
 
 #ifdef __cplusplus
 }

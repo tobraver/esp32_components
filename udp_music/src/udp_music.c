@@ -53,6 +53,7 @@ static esp_err_t _udp_music_proto_notify_status(int code, char* msg);
 #define UDP_MUSIC_STATUS_STOP   (BIT1)
 #define UDP_MUSIC_STATUS_BUSY   (BIT2)
 #define UDP_MUSIC_STATUS_SYNC   (BIT3)
+#define UDP_MUSIC_STATUS_BREAK  (BIT4)
 
 typedef struct {
     char        ip[16];
@@ -66,6 +67,7 @@ typedef struct {
     int       bits; // 8, 16, 24, 32
     int       bit_rate;
     int       buff_size;
+    int       fill_size;
 } udp_music_play_t;
 
 typedef struct {
@@ -73,6 +75,7 @@ typedef struct {
     udp_music_addr_t    recv;
     udp_music_addr_t    music;
     char*               task_id;
+    int                 task_level;
     udp_music_play_t    play;
     SemaphoreHandle_t   mutex;
     RingbufHandle_t     msg_buf;
@@ -191,6 +194,11 @@ static esp_err_t _udp_music_bits_valid(int bits)
         }
     }
     return ESP_FAIL;
+}
+
+static esp_err_t _udp_music_task_level_valid(int level)
+{
+    return (level > 0) && (level < 0x7FFFFFFF) ? ESP_OK : ESP_FAIL;
 }
 
 static esp_err_t _udp_music_is_multicast_ip(char* addr)
@@ -362,6 +370,47 @@ static esp_err_t _udp_music_set_task_id(char* task_id)
     return ESP_OK;
 }
 
+static int _udp_music_get_task_level(void)
+{
+    int level = 0;
+    _udp_music_lock();
+    level = s_desc.task_level;
+    _udp_music_unlock();
+    return level;
+}
+
+static esp_err_t _udp_music_set_task_level(int level)
+{
+    _udp_music_lock();
+    s_desc.task_level = level;
+    _udp_music_unlock();
+    ESP_LOGI(TAG, "udp music task level set success, level=%d", s_desc.task_level);
+    return ESP_OK;
+}
+
+static int _udp_music_get_push_status(void)
+{
+    int status = 0; // 0:normal, 1:fast, 2:slow
+    udp_music_play_t play = _udp_music_get_play_info();
+    if(play.fill_size == 0) {
+        return status;
+    }
+    int slow_size = play.bit_rate * ((UDP_MUSIC_PLAYER_TIMEOUT + 6000) / 1000) / 8; // 6s
+    int fast_size = play.bit_rate * ((UDP_MUSIC_PLAYER_TIMEOUT + 9000) / 1000) / 8; // 9s
+    if(play.format > 0) { // wav / pcm
+        slow_size = play.bit_rate * ((UDP_MUSIC_PLAYER_TIMEOUT + 4000) / 1000) / 8; // 4s
+        fast_size = play.bit_rate * ((UDP_MUSIC_PLAYER_TIMEOUT + 6000) / 1000) / 8; // 6s
+    }
+    if(play.fill_size < slow_size) {
+        status = 2;
+    } else if(play.fill_size > fast_size) {
+        status = 1;
+    } else {
+        status = 0;
+    }
+    return status;
+}
+
 static char* _udp_music_get_mac(void)
 {
     char* mac = NULL;
@@ -469,6 +518,30 @@ esp_err_t udp_music_init(udp_music_conf_t* conf)
     xTaskCreate(udp_player_task, "udp_player", 4096, NULL, 6, NULL);
     xTaskCreate(udp_status_task, "udp_status", 4096, NULL, 4, NULL);
     return ESP_OK;
+}
+
+esp_err_t udp_music_busy(void)
+{
+    return _udp_music_get_status(UDP_MUSIC_STATUS_BUSY, 0);
+}
+
+esp_err_t udp_music_wait_idle(uint32_t timeout)
+{
+    ESP_LOGI(TAG, "udp music wait idle, timeout=%d", timeout);
+    while(timeout--) {
+        if(udp_music_busy() != ESP_OK) {
+            return ESP_OK;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return ESP_FAIL;
+}
+
+esp_err_t udp_music_stop(uint32_t timeout)
+{
+    ESP_LOGW(TAG, "udp music stop, timeout=%d", timeout);
+    _udp_music_set_status(UDP_MUSIC_STATUS_STOP, true);
+    return udp_music_wait_idle(timeout);
 }
 
 static int _udp_music_recv_socket_create(char* ip, uint16_t port, bool is_mreq)
@@ -587,10 +660,27 @@ static void udp_msg_task(void* arg)
     vTaskDelete(NULL);
 }
 
+static esp_err_t _udp_music_pipline_break(audio_pipeline_handle_t pipline, audio_element_handle_t i2s_stream)
+{
+    if(pipline == NULL || i2s_stream == NULL) {
+        return ESP_FAIL;
+    }
+    audio_pipeline_stop(pipline);
+    audio_pipeline_wait_for_stop(pipline);
+    audio_pipeline_reset_elements(pipline);
+    audio_pipeline_reset_ringbuffer(pipline);
+    udp_music_play_t play = _udp_music_get_play_info();
+    i2s_stream_set_clk(i2s_stream, play.rate, play.bits, play.channel);
+    audio_pipeline_run(pipline);
+    return ESP_OK;
+}
+
 static void udp_player_task(void* arg)
 {
     ESP_LOGI(TAG, "udp music player task start!");
+    esp_err_t err = ESP_OK;
     while(1) {
+        _udp_music_set_status(UDP_MUSIC_STATUS_STOP, false);
         _udp_music_set_status(UDP_MUSIC_STATUS_BUSY, false);
         if(_udp_music_get_status(UDP_MUSIC_STATUS_START, portMAX_DELAY) != ESP_OK) {
             ESP_LOGE(TAG, "udp music get start failed!");
@@ -637,6 +727,8 @@ static void udp_player_task(void* arg)
         audio_hal_set_volume(board_handle->audio_hal, _udp_music_get_volume());
 
         udp_stream_cfg_t udp_cfg = UDP_STREAM_CFG_DEFAULT();
+        udp_cfg.task_core = 1;
+        udp_cfg.task_prio = 21;
         udp_cfg.host = addr.ip;
         udp_cfg.port = addr.port;
         udp_cfg.use_mreq = _udp_music_is_multicast_ip(addr.ip) == ESP_OK;
@@ -650,12 +742,18 @@ static void udp_player_task(void* arg)
         }
         if(play.format == 1) { // wav
             wav_decoder_cfg_t wav_cfg = DEFAULT_WAV_DECODER_CONFIG();
+            wav_cfg.task_core = 1;
+            wav_cfg.task_core = 22;
             decoder_stream = wav_decoder_init(&wav_cfg);
         } else if(play.format == 2) { // pcm
             pcm_decoder_cfg_t pcm_cfg = DEFAULT_PCM_DECODER_CONFIG();
+            pcm_cfg.task_core = 1;
+            pcm_cfg.task_prio = 22;
             decoder_stream = pcm_decoder_init(&pcm_cfg);
         } else { // mp3
             mp3_decoder_cfg_t mp3_cfg = DEFAULT_MP3_DECODER_CONFIG();
+            mp3_cfg.task_core = 1;
+            mp3_cfg.task_prio = 22;
             decoder_stream = mp3_decoder_init(&mp3_cfg);
         }
         if(decoder_stream == NULL) {
@@ -665,6 +763,8 @@ static void udp_player_task(void* arg)
         }
 
         i2s_stream_cfg_t i2s_cfg = I2S_STREAM_CFG_DEFAULT();
+        i2s_cfg.task_core = 1; 
+        i2s_cfg.task_prio = 23;
         i2s_cfg.type = AUDIO_STREAM_WRITER;
         i2s_cfg.i2s_config.sample_rate = play.rate;
         i2s_cfg.i2s_config.channel_format = (play.channel == 2) ? I2S_CHANNEL_FMT_RIGHT_LEFT : I2S_CHANNEL_FMT_ONLY_LEFT;
@@ -688,14 +788,31 @@ static void udp_player_task(void* arg)
         audio_pipeline_register(pipeline, i2s_stream, "i2s_stream");
 
         const char *link_tag[3] = {"udp_stream", "decoder_stream", "i2s_stream"};
-        audio_pipeline_link(pipeline, &link_tag[0], 3);
-        audio_pipeline_run(pipeline);
+        err = audio_pipeline_link(pipeline, &link_tag[0], 3);
+        if(err != ESP_OK) {
+            ESP_LOGE(TAG, "(%s) pipeline link failed!", __func__);
+            _udp_music_proto_notify_status(1, "pipeline连接失败");
+            goto _finish;
+        }
+        err = audio_pipeline_run(pipeline);
+        if(err != ESP_OK) {
+            ESP_LOGE(TAG, "(%s) pipeline run failed!", __func__);
+            _udp_music_proto_notify_status(1, "pipeline启动失败");
+            goto _finish;
+        }
 
         _udp_music_proto_notify_status(0, "正在播放");
         audio_hal_enable_pa(board_handle->audio_hal, true);
         audio_element_state_t state = AEL_STATE_NONE;
         uint32_t state_ticks = 0;
         while (1) {
+            if(_udp_music_get_status(UDP_MUSIC_STATUS_BREAK, 0) == ESP_OK) {
+                audio_hal_enable_pa(board_handle->audio_hal, false);
+                _udp_music_pipline_break(pipeline, i2s_stream);
+                audio_hal_enable_pa(board_handle->audio_hal, true);
+                _udp_music_set_status(UDP_MUSIC_STATUS_BREAK, false);
+                continue;
+            }
             state = audio_element_get_state(i2s_stream);
             if(state >= AEL_STATE_STOPPED) {
                 printf("i2s stream stop, state = %d\n", state);
@@ -713,11 +830,17 @@ static void udp_player_task(void* arg)
             state_ticks++;
             if((state_ticks % 5000) == 0) {
                 _udp_music_set_status(UDP_MUSIC_STATUS_SYNC, true);
+                play.fill_size = rb_bytes_filled(audio_element_get_output_ringbuf(udp_stream));
+                _udp_music_set_play_info(play);
             }
             vTaskDelay(1);
         }
         audio_hal_enable_pa(board_handle->audio_hal, false);
         _udp_music_proto_notify_status(0, "播放结束");
+
+        if(udp_stream) {
+            printf("## udp stream read num=%d, read bytes=%d\n", udp_stream_get_read_num(udp_stream), udp_stream_get_read_bytes(udp_stream));
+        }
 
     _finish:
         if(pipeline) {
@@ -942,6 +1065,9 @@ static esp_err_t _udp_music_proto_response(cJSON* root, udp_music_proto_t proto,
     cJSON* data = cJSON_CreateObject();
     if(data) {
         cJSON_AddStringToObject(data, "mac", _udp_music_get_mac());
+        if(proto == UDP_MUSIC_PROTO_STATUS) {
+            cJSON_AddNumberToObject(data, "push", _udp_music_get_push_status());
+        }
         char* json = _udp_music_get_proto_response_json(root, _udp_music_get_proto_str(proto), code, msg, data);
         if(json) {
             char* ip = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(cJSON_GetObjectItem(root, "params"), "response"), "ip"));
@@ -1016,14 +1142,24 @@ static esp_err_t udp_music_proto_start_handler(cJSON* root)
     if(buff_size > UDP_MUSIC_PLAYER_MAX_BUF_SIZE) {
         return _udp_music_proto_response(root, UDP_MUSIC_PROTO_START, 1, "bit_rate不支持");
     }
-    buff_size += UDP_MUSIC_PLAYER_IDLE_BUF_SIZE;
+    buff_size = UDP_MUSIC_PLAYER_MAX_BUF_SIZE + UDP_MUSIC_PLAYER_IDLE_BUF_SIZE;
+    int task_level = cJSON_GetNumberValue(cJSON_GetObjectItem(root, "task_level"));
+    if(_udp_music_task_level_valid(task_level) != ESP_OK) {
+        return _udp_music_proto_response(root, UDP_MUSIC_PROTO_START, 1, "task_level字段有误");
+    }
     // play status
     if(_udp_music_get_status(UDP_MUSIC_STATUS_BUSY, 0) == ESP_OK) {
-        return _udp_music_proto_response(root, UDP_MUSIC_PROTO_START, 1, "播放中");
+        if(task_level <= _udp_music_get_task_level()) {
+            ESP_LOGW(TAG, "udp music is playing, but low task level.");
+            return _udp_music_proto_response(root, UDP_MUSIC_PROTO_START, 1, "播放中");
+        }
+        ESP_LOGW(TAG, "udp music is playing, but high task level, player will break.");
+        _udp_music_set_status(UDP_MUSIC_STATUS_BREAK, true);
     }
     // success
     _udp_music_set_music_addr(ip, port); // set music addr
     _udp_music_proto_update_send_addr(root); // update send addr
+    _udp_music_set_task_level(task_level); // set task level
     _udp_music_set_task_id(cJSON_GetStringValue(cJSON_GetObjectItem(root, "task_id")));
     udp_music_play_t play = { .format = format, .rate = rate, .channel = channel, .bits = bits, .bit_rate = bit_rate, .buff_size = buff_size };
     _udp_music_set_play_info(play); // update play info

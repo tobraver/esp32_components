@@ -18,6 +18,10 @@ typedef struct udp_stream {
     struct ip_mreq                mreq;
     bool                          is_open;
     bool                          use_mreq;
+    int                           read_num;
+    int                           read_bytes;
+    int                           write_num;
+    int                           write_bytes;
     int                           timeout_ms;
     udp_stream_event_handle_cb    hook;
     void                          *ctx;
@@ -134,6 +138,8 @@ static esp_err_t _udp_read(audio_element_handle_t self, char *buffer, int len, T
         _dispatch_event(self, udp, &reason, sizeof(reason), UDP_STREAM_STATE_ERROR);
         return ESP_FAIL;
     }
+    udp->read_num++;
+    udp->read_bytes += rlen;
     audio_element_update_byte_pos(self, rlen);
     ESP_LOGD(TAG, "read len=%d, rlen=%d", len, rlen);
     return rlen;
@@ -149,6 +155,8 @@ static esp_err_t _udp_write(audio_element_handle_t self, char *buffer, int len, 
         _dispatch_event(self, udp, &reason, sizeof(reason), UDP_STREAM_STATE_ERROR);
         return ESP_FAIL;
     }
+    udp->write_num++;
+    udp->write_bytes += wlen;
     ESP_LOGD(TAG, "write len=%d, rlen=%d", len, wlen);
     return wlen;
 }
@@ -246,4 +254,44 @@ audio_element_handle_t udp_stream_init(udp_stream_cfg_t *config)
 _udp_init_exit:
     audio_free(udp);
     return NULL;
+}
+
+int udp_stream_get_read_num(audio_element_handle_t el)
+{
+    int num = 0;
+    udp_stream_t *udp = (udp_stream_t *)audio_element_getdata(el);
+    if(udp) {
+        num = udp->read_num;
+    }
+    return num;
+}
+
+int udp_stream_get_write_num(audio_element_handle_t el)
+{
+    int num = 0;
+    udp_stream_t *udp = (udp_stream_t *)audio_element_getdata(el);
+    if(udp) {
+        num = udp->write_num;
+    }
+    return num;
+}
+
+int udp_stream_get_read_bytes(audio_element_handle_t el)
+{
+    int bytes = 0;
+    udp_stream_t *udp = (udp_stream_t *)audio_element_getdata(el);
+    if(udp) {
+        bytes = udp->read_bytes;
+    }
+    return bytes;
+}
+
+int udp_stream_get_write_bytes(audio_element_handle_t el)
+{
+    int bytes = 0;
+    udp_stream_t *udp = (udp_stream_t *)audio_element_getdata(el);
+    if(udp) {
+        bytes = udp->write_bytes;
+    }
+    return bytes;
 }
