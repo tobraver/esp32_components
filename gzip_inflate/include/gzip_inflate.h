@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 esp_err_t gzip_inflate(uint8_t *in, int inlen, uint8_t *out, int *outlen);
+int gzip_inflate_size(uint8_t *in, int inlen);
 
 #ifdef __cplusplus
 }
