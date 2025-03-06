@@ -95,28 +95,28 @@ menu "ETH Network Configuration"
 
         config NETWORK_ETH_SPI_SCLK_GPIO
             int "SPI SCLK GPIO number"
-            range 0 33
+            range 0 43
             default 20
             help
                 Set the GPIO number used by SPI SCLK.
 
         config NETWORK_ETH_SPI_MOSI_GPIO
             int "SPI MOSI GPIO number"
-            range 0 33
+            range 0 43
             default 19
             help
                 Set the GPIO number used by SPI MOSI.
 
         config NETWORK_ETH_SPI_MISO_GPIO
             int "SPI MISO GPIO number"
-            range 0 33
+            range 0 43
             default 18
             help
                 Set the GPIO number used by SPI MISO.
 
         config NETWORK_ETH_SPI_CS_GPIO
             int "SPI CS GPIO number"
-            range 0 33
+            range 0 43
             default 21
             help
                 Set the GPIO number used by SPI CS.
