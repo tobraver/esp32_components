@@ -31,27 +31,27 @@ static bool s_debuge_enable = RB_LOG_DEBUG_ENABLE;
 
 static RingbufHandle_t s_rb_log = NULL;
 
-static int _rb_log_prepare_buff(int size)
-{
-    int ret = -1;
-    int retry = 30;
-    if((s_rb_log == NULL) || (size <= 0)) {
-        return ret;
-    }
-    do {
-        size_t free_size = xRingbufferGetCurFreeSize(s_rb_log);
-        if(free_size > size) {
-            ret = 0;
-            break;
-        } else {
-            void* item = xRingbufferReceive(s_rb_log, NULL, RB_LOG_BUFF_RD_TIMEOUT);
-            if(item) {
-                vRingbufferReturnItem(s_rb_log, item);
-            }
-        }
-    } while (retry--);
-    return ret;
-}
+// static int _rb_log_prepare_buff(int size)
+// {
+//     int ret = -1;
+//     int retry = 30;
+//     if((s_rb_log == NULL) || (size <= 0)) {
+//         return ret;
+//     }
+//     do {
+//         size_t free_size = xRingbufferGetCurFreeSize(s_rb_log);
+//         if(free_size > size) {
+//             ret = 0;
+//             break;
+//         } else {
+//             void* item = xRingbufferReceive(s_rb_log, NULL, RB_LOG_BUFF_RD_TIMEOUT);
+//             if(item) {
+//                 vRingbufferReturnItem(s_rb_log, item);
+//             }
+//         }
+//     } while (retry--);
+//     return ret;
+// }
 
 static int _rb_log_vprintf(const char *fmt, va_list args)
 {
@@ -89,8 +89,10 @@ static int _rb_log_vprintf(const char *fmt, va_list args)
             "## rb log format to cache failed!");
 
     // ring buffer prepare
-    RB_LOG_ERROR_EXIT(_rb_log_prepare_buff(size) < 0, \
-        "## rb log preare buffer failed!");
+    // RB_LOG_ERROR_EXIT(_rb_log_prepare_buff(size) < 0,
+    //     "## rb log preare buffer failed!");
+    RB_LOG_ERROR_EXIT((rb_log_get_free_size() + 8) < size, \
+            "## rb log is full!");
 
     // write to ring buffer
     xRingbufferSend(s_rb_log, cache, size + 1, RB_LOG_BUFF_WR_TIMEOUT);
@@ -169,3 +171,86 @@ int rb_log_free_msg(char* msg)
     return ret;
 }
 
+//Ring buffer flags
+#define rbALLOW_SPLIT_FLAG          ( ( UBaseType_t ) 1 )   //The ring buffer allows items to be split
+#define rbBYTE_BUFFER_FLAG          ( ( UBaseType_t ) 2 )   //The ring buffer is a byte buffer
+#define rbBUFFER_FULL_FLAG          ( ( UBaseType_t ) 4 )   //The ring buffer is currently full (write pointer == free pointer)
+#define rbBUFFER_STATIC_FLAG        ( ( UBaseType_t ) 8 )   //The ring buffer is statically allocated
+
+typedef struct RingbufferDefinition Ringbuffer_t;
+typedef BaseType_t (*CheckItemFitsFunction_t)(Ringbuffer_t *pxRingbuffer, size_t xItemSize);
+typedef void (*CopyItemFunction_t)(Ringbuffer_t *pxRingbuffer, const uint8_t *pcItem, size_t xItemSize);
+typedef BaseType_t (*CheckItemAvailFunction_t) (Ringbuffer_t *pxRingbuffer);
+typedef void *(*GetItemFunction_t)(Ringbuffer_t *pxRingbuffer, BaseType_t *pxIsSplit, size_t xMaxSize, size_t *pxItemSize);
+typedef void (*ReturnItemFunction_t)(Ringbuffer_t *pxRingbuffer, uint8_t *pvItem);
+typedef size_t (*GetCurMaxSizeFunction_t)(Ringbuffer_t *pxRingbuffer);
+
+typedef struct RingbufferDefinition {
+    size_t xSize;                               //Size of the data storage
+    size_t xMaxItemSize;                        //Maximum item size
+    UBaseType_t uxRingbufferFlags;              //Flags to indicate the type and status of ring buffer
+
+    CheckItemFitsFunction_t xCheckItemFits;     //Function to check if item can currently fit in ring buffer
+    CopyItemFunction_t vCopyItem;               //Function to copy item to ring buffer
+    GetItemFunction_t pvGetItem;                //Function to get item from ring buffer
+    ReturnItemFunction_t vReturnItem;           //Function to return item to ring buffer
+    GetCurMaxSizeFunction_t xGetCurMaxSize;     //Function to get current free size
+
+    uint8_t *pucAcquire;                        //Acquire Pointer. Points to where the next item should be acquired.
+    uint8_t *pucWrite;                          //Write Pointer. Points to where the next item should be written
+    uint8_t *pucRead;                           //Read Pointer. Points to where the next item should be read from
+    uint8_t *pucFree;                           //Free Pointer. Points to the last item that has yet to be returned to the ring buffer
+    uint8_t *pucHead;                           //Pointer to the start of the ring buffer storage area
+    uint8_t *pucTail;                           //Pointer to the end of the ring buffer storage area
+
+    BaseType_t xItemsWaiting;                   //Number of items/bytes(for byte buffers) currently in ring buffer that have not yet been read
+    /*
+     * TransSem: Binary semaphore used to indicate to a blocked transmitting tasks
+     *           that more free space has become available or that the block has
+     *           timed out.
+     *
+     * RecvSem: Binary semaphore used to indicate to a blocked receiving task that
+     *          new data/item has been written to the ring buffer.
+     *
+     * Note - When static allocation is enabled, the two semaphores are always
+     *        statically stored in the ring buffer's control structure
+     *        regardless of whether the ring buffer is allocated dynamically or
+     *        statically. When static allocation is disabled, the two semaphores
+     *        are allocated dynamically and their handles stored instead, thus
+     *        making the ring buffer's control structure slightly smaller when
+     *        static allocation is disabled.
+     */
+#if ( configSUPPORT_STATIC_ALLOCATION == 1 )
+    StaticSemaphore_t xTransSemStatic;
+    StaticSemaphore_t xRecvSemStatic;
+#else
+    SemaphoreHandle_t xTransSemHandle;
+    SemaphoreHandle_t xRecvSemHandle;
+#endif
+    portMUX_TYPE mux;                           //Spinlock required for SMP
+} Ringbuffer_t;
+
+static size_t prvGetFreeSize(Ringbuffer_t *pxRingbuffer)
+{
+    size_t xReturn;
+    if (pxRingbuffer->uxRingbufferFlags & rbBUFFER_FULL_FLAG) {
+        xReturn =  0;
+    } else {
+        BaseType_t xFreeSize = pxRingbuffer->pucFree - pxRingbuffer->pucAcquire;
+        //Check if xFreeSize has underflowed
+        if (xFreeSize <= 0) {
+            xFreeSize += pxRingbuffer->xSize;
+        }
+        xReturn = xFreeSize;
+    }
+    configASSERT(xReturn <= pxRingbuffer->xSize);
+    return xReturn;
+}
+
+int rb_log_get_free_size(void)
+{
+    Ringbuffer_t *pxRingbuffer = (Ringbuffer_t *)s_rb_log;
+    configASSERT(pxRingbuffer);
+    int free_size = prvGetFreeSize(pxRingbuffer);
+    return free_size;
+}

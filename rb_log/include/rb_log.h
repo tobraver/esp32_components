@@ -8,15 +8,16 @@
 // log to buffer enable
 #define RB_LOG_BUFF_ENABLE   1
 // log buffer use psram
-#define RB_LOG_BUFF_PSRAM    0
+#define RB_LOG_BUFF_PSRAM    1
 // log buffer size
-#define RB_LOG_BUFF_SIZE     (5 * 1024)
+#define RB_LOG_BUFF_SIZE     (500 * 1024)
 
 #if __cplusplus
 extern "C" {
 #endif
 
 int rb_log_init(void);
+int rb_log_get_free_size(void);
 int rb_log_get_msg_num(void);
 char* rb_log_get_msg(void);
 int rb_log_free_msg(char* msg);
