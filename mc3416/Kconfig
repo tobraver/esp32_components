@@ -1,0 +1,50 @@
+menu "Driver MC3416 Sensor"
+
+    menu "I2C"
+        config MC3416_I2C_NUM
+            int "I2C peripheral index"
+            default -1
+            range -1 3
+            help
+                For auto select I2C peripheral, set to -1.
+
+        config MC3416_I2C_SDA
+            int "I2C SDA pin"
+            default 2
+            range 0 55
+            help
+                Set the I2C SDA pin for the data signal.
+
+        config MC3416_I2C_SCL
+            int "I2C SCL pin"
+            default 1
+            range 0 55
+            help
+                Set the I2C SCL pin for the clock signal.
+
+        config MC3416_I2C_CLK_SPEED_HZ
+            int "I2C clock speed (Hz)"
+            default 100000
+            range 10000 1000000
+            help
+                Set the I2C clock speed in Hz. MC3416 supports up to 1 MHz.
+
+        choice MC3416_I2C_ADDR
+            prompt "MC3416 I2C address"
+            default MC3416_I2C_ADDR_0
+            help
+                Select the I2C address based on the VPP pin level at power-up.
+
+            config MC3416_I2C_ADDR_0
+                bool "0x4C (VPP pin to GND)"
+            config MC3416_I2C_ADDR_1
+                bool "0x6C (VPP pin to VDD)"
+        endchoice
+
+        config MC3416_I2C_ADDRESS
+            hex
+            default 0x4C if MC3416_I2C_ADDR_0
+            default 0x6C if MC3416_I2C_ADDR_1
+    endmenu
+
+endmenu

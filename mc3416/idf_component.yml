@@ -1,0 +1,12 @@
+dependencies:
+  idf: '>=5.0'
+description: MC3416 3-axis accelerometer driver for ESP-IDF
+targets:
+- esp32
+- esp32s2
+- esp32s3
+- esp32c3
+- esp32c2
+- esp32c6
+- esp32h2
+version: 0.1.0
